@@ -5715,6 +5715,7 @@ manage_acme_certificate_menu() {
     echo -e "1. 申请并安装 Let's Encrypt 证书（自动续期 + 自动生效）"
     echo -e "2. 强制手动更新/续期证书"
     echo -e "3. 查看当前证书详情与到期时间"
+    echo -e "4. 回退并恢复使用系统自签证书"
     echo -e "0. 返回主菜单"
     echo -e "======================================================"
     reading " 请输入选项: " CERT_CHOOSE
@@ -5724,6 +5725,7 @@ manage_acme_certificate_menu() {
     echo -e "1. Apply & Install Let's Encrypt Cert (Auto Renew + Auto Restart)"
     echo -e "2. Force Manual Renew Cert"
     echo -e "3. View Current Cert Details & Expiration"
+    echo -e "4. Revert and use system self-signed certificates"
     echo -e "0. Back to Main Menu"
     echo -e "======================================================"
     reading " Please enter your choice: " CERT_CHOOSE
@@ -5748,7 +5750,7 @@ manage_acme_certificate_menu() {
       [ "$L" = "C" ] && info "开始检查域名解析..." || info "Checking domain DNS resolution..."
       local RESOLVED_IP=$(ping -c 1 -4 "$CERT_DOMAIN" 2>/dev/null | awk -F '[()]' '/PING/{print $2}')
       [ -z "$RESOLVED_IP" ] && RESOLVED_IP=$(nslookup "$CERT_DOMAIN" 2>/dev/null | awk '/Address: / {print $2}' | tail -n 1)
-      
+
       if [ -z "$RESOLVED_IP" ]; then
         [ "$L" = "C" ] && warning "域名 $CERT_DOMAIN 无法解析，请确保已添加 DNS 解析！" || warning "Domain $CERT_DOMAIN cannot be resolved. Please make sure DNS is configured!"
         sleep 3
@@ -5758,7 +5760,7 @@ manage_acme_certificate_menu() {
 
       # 开始申请并安装
       [ "$L" = "C" ] && info "检测到域名解析到 IP: $RESOLVED_IP" || info "Detected domain resolves to IP: $RESOLVED_IP"
-      
+
       # 安装依赖
       if command -v apt-get >/dev/null 2>&1; then
         apt-get update -y && apt-get install -y socat curl >/dev/null 2>&1
@@ -5776,39 +5778,36 @@ manage_acme_certificate_menu() {
         systemctl stop nginx >/dev/null 2>&1 || true
         systemctl stop caddy >/dev/null 2>&1 || true
         systemctl stop sing-box >/dev/null 2>&1 || true
-        
+
         # 注册 ACME 账户，设置默认 CA 为 Let's Encrypt
         /root/.acme.sh/acme.sh --register-account -m my_singbox_acme@gmail.com --server letsencrypt >/dev/null 2>&1
         /root/.acme.sh/acme.sh --set-default-ca --server letsencrypt >/dev/null 2>&1
-        
+
         # 申请证书 (使用 80 端口独立验证模式)
         /root/.acme.sh/acme.sh --issue -d "$CERT_DOMAIN" --standalone --keylength ec-256 --force
-        
+
         # 检查并安装证书
         if [ -s "/root/.acme.sh/${CERT_DOMAIN}_ecc/${CERT_DOMAIN}.key" ] && [ -s "/root/.acme.sh/${CERT_DOMAIN}_ecc/fullchain.cer" ]; then
           [ ! -d ${WORK_DIR}/cert ] && mkdir -p ${WORK_DIR}/cert
-          
+
           # 通过 acme.sh 官方命令进行安装，设置自动续期 reloadcmd，续期后自动重启 sing-box
-          /root/.acme.sh/acme.sh --install-cert -d "$CERT_DOMAIN" --ecc \
-            --key-file "${WORK_DIR}/cert/private.key" \
-            --fullchain-file "${WORK_DIR}/cert/cert.pem" \
-            --reloadcmd "cp ${WORK_DIR}/cert/cert.pem ${WORK_DIR}/cert/cert_200.pem && systemctl restart sing-box"
-          
+          /root/.acme.sh/acme.sh --install-cert -d "$CERT_DOMAIN" --ecc             --key-file "${WORK_DIR}/cert/private.key"             --fullchain-file "${WORK_DIR}/cert/cert.pem"             --reloadcmd "cp ${WORK_DIR}/cert/cert.pem ${WORK_DIR}/cert/cert_200.pem && systemctl restart sing-box"
+
           # 拷贝一份给 NaiveProxy 使用
           cp "${WORK_DIR}/cert/cert.pem" "${WORK_DIR}/cert/cert_200.pem"
-          
+
           # 自动修正现有 inbound 配置文件中的域名
           for FILE in ${WORK_DIR}/conf/*_inbounds.json; do
             if [ -s "$FILE" ] && grep -q 'certificate_path' "$FILE"; then
-              sed -i "s/\"server_name\":.*/\"server_name\":\"$CERT_DOMAIN\",/g" "$FILE"
+              sed -i "s/"server_name":.*/"server_name":"$CERT_DOMAIN",/g" "$FILE"
             fi
           done
-          
+
           [ "$L" = "C" ] && info "Let's Encrypt 证书申请与安装成功！已配置每日自动检查与续期。" || info "Let's Encrypt certificate applied & installed successfully! Auto-renew and restart scheduled."
         else
           [ "$L" = "C" ] && error "证书申请失败，请检查服务器 80 端口是否放行，且未被占用！" || error "Certificate application failed. Check if port 80 is open and not in use!"
         fi
-        
+
         # 恢复服务
         systemctl start nginx >/dev/null 2>&1 || true
         systemctl start caddy >/dev/null 2>&1 || true
@@ -5840,6 +5839,41 @@ manage_acme_certificate_menu() {
         [ "$L" = "C" ] && warning "未找到已安装的证书文件。" || warning "No installed certificate found."
       fi
       reading "\n按任意键返回... " TEMP_KEY
+      manage_acme_certificate_menu
+      ;;
+    4)
+      # 回退并恢复使用系统自签证书
+      if [ "$L" = "C" ]; then
+        reading " 是否确认删除 Let's Encrypt 证书并回退到原版自签证书？(y/n): " REVERT_CONFIRM
+      else
+        reading " Are you sure you want to delete Let's Encrypt cert and revert to self-signed? (y/n): " REVERT_CONFIRM
+      fi
+
+      if [[ "${REVERT_CONFIRM,,}" = "y" ]]; then
+        local CURRENT_DOMAIN=$(openssl x509 -noout -ext subjectAltName -in "${WORK_DIR}/cert/cert.pem" 2>/dev/null | awk -F 'DNS:' '/DNS:/{gsub(/,.*/, "", $2); print $2}')
+        
+        [ "$L" = "C" ] && info "正在清理 acme.sh 证书续期计划..." || info "Cleaning up acme.sh cert schedule..."
+        if [ -n "$CURRENT_DOMAIN" ] && [ -x "/root/.acme.sh/acme.sh" ]; then
+          /root/.acme.sh/acme.sh --remove -d "$CURRENT_DOMAIN" --ecc >/dev/null 2>&1 || true
+        fi
+
+        [ "$L" = "C" ] && info "正在重新生成默认自签证书 (addons.mozilla.org)..." || info "Re-generating default self-signed cert (addons.mozilla.org)..."
+        ssl_certificate "addons.mozilla.org"
+        
+        # 恢复现有配置文件中的域名为 addons.mozilla.org
+        for FILE in ${WORK_DIR}/conf/*_inbounds.json; do
+          if [ -s "$FILE" ] && grep -q 'certificate_path' "$FILE"; then
+            sed -i 's/"server_name":.*/"server_name":"addons.mozilla.org",/g' "$FILE"
+          fi
+        done
+
+        # 重启服务生效
+        systemctl restart sing-box >/dev/null 2>&1 || true
+        [ "$L" = "C" ] && info "成功回退到自签证书模式！" || info "Successfully reverted to self-signed certificate mode!"
+      else
+        [ "$L" = "C" ] && info "已取消操作。" || info "Operation cancelled."
+      fi
+      sleep 3
       manage_acme_certificate_menu
       ;;
     0)
