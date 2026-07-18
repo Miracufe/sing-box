@@ -1,0 +1,32 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Runs every day at 00:00 UTC (08:00 Beijing time)
+  workflow_dispatch: # Allows manual trigger
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Target Repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Sync Upstream
+        run: |
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+          
+          # Add upstream repository
+          git remote add upstream https://github.com/fscarmen/sing-box.git
+          git fetch upstream
+          
+          # Merge upstream changes, resolving any conflicts automatically by preferring our changes (ours strategy)
+          # This keeps your custom Let's Encrypt and protocol changes safe during sync.
+          git merge upstream/main -m "Sync upstream updates" --strategy-option ours || true
+          
+          # Push to your repository
+          git push origin main

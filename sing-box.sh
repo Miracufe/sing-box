@@ -3277,17 +3277,67 @@ ssl_certificate() {
   local CERT_MODE="$2"
   local CERT_200_FILE="${WORK_DIR}/cert/cert_200.pem"
   local CERT_200_SNI
+  local ACME_SUCCESS=false
 
   [ ! -d ${WORK_DIR}/cert ] && mkdir -p ${WORK_DIR}/cert
 
-  if [ "$CERT_MODE" != 'naive_only' ]; then
-    openssl ecparam -genkey -name prime256v1 -out ${WORK_DIR}/cert/private.key
-  elif [ ! -s ${WORK_DIR}/cert/private.key ] || [ ! -s ${WORK_DIR}/cert/cert.pem ]; then
-    CERT_MODE=''
-    openssl ecparam -genkey -name prime256v1 -out ${WORK_DIR}/cert/private.key
+  # 判断 TLS_SERVER 是否为有效域名（包含点，不全是数字/点，不包含冒号）
+  if [[ "$TLS_SERVER" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]] && [[ ! "$TLS_SERVER" =~ ^[0-9.]+$ ]] && [[ ! "$TLS_SERVER" =~ : ]]; then
+    echo -e "检测到有效域名 $TLS_SERVER，尝试通过 acme.sh 申请 Let's Encrypt 证书..."
+    
+    # 安装依赖
+    if command -v apt-get >/dev/null 2>&1; then
+      apt-get update -y && apt-get install -y socat curl >/dev/null 2>&1
+    elif command -v yum >/dev/null 2>&1; then
+      yum install -y socat curl >/dev/null 2>&1
+    fi
+
+    # 安装 acme.sh
+    if [ ! -d "/root/.acme.sh" ]; then
+      curl https://get.acme.sh | sh -s email=my_singbox_acme@gmail.com >/dev/null 2>&1
+    fi
+
+    # 运行 acme.sh 申请证书
+    if [ -x "/root/.acme.sh/acme.sh" ]; then
+      # 临时停止占用 80 端口的服务
+      systemctl stop nginx >/dev/null 2>&1 || true
+      systemctl stop caddy >/dev/null 2>&1 || true
+      systemctl stop sing-box >/dev/null 2>&1 || true
+      
+      # 注册 ACME 账户，设置默认 CA 为 Let's Encrypt
+      /root/.acme.sh/acme.sh --register-account -m my_singbox_acme@gmail.com --server letsencrypt >/dev/null 2>&1
+      /root/.acme.sh/acme.sh --set-default-ca --server letsencrypt >/dev/null 2>&1
+      
+      # 申请证书 (使用 80 端口独立验证模式)
+      /root/.acme.sh/acme.sh --issue -d "$TLS_SERVER" --standalone --keylength ec-256 --force
+      
+      # 检查证书是否申请成功
+      if [ -s "/root/.acme.sh/${TLS_SERVER}_ecc/${TLS_SERVER}.key" ] && [ -s "/root/.acme.sh/${TLS_SERVER}_ecc/fullchain.cer" ]; then
+        cp "/root/.acme.sh/${TLS_SERVER}_ecc/${TLS_SERVER}.key" "${WORK_DIR}/cert/private.key"
+        cp "/root/.acme.sh/${TLS_SERVER}_ecc/fullchain.cer" "${WORK_DIR}/cert/cert.pem"
+        cp "/root/.acme.sh/${TLS_SERVER}_ecc/fullchain.cer" "${WORK_DIR}/cert/cert_200.pem"
+        ACME_SUCCESS=true
+        echo -e "Let's Encrypt 证书申请并应用成功！"
+      else
+        echo -e "acme.sh 申请失败，将自动回退到自签证书模式。"
+      fi
+      
+      # 恢复服务
+      systemctl start nginx >/dev/null 2>&1 || true
+      systemctl start caddy >/dev/null 2>&1 || true
+    fi
   fi
 
-  cat > ${WORK_DIR}/cert/cert.conf << EOF
+  # 若 ACME 申请未成功，则回退使用原版的自签证书生成逻辑
+  if [ "$ACME_SUCCESS" = "false" ]; then
+    if [ "$CERT_MODE" != 'naive_only' ]; then
+      openssl ecparam -genkey -name prime256v1 -out ${WORK_DIR}/cert/private.key
+    elif [ ! -s ${WORK_DIR}/cert/private.key ] || [ ! -s ${WORK_DIR}/cert/cert.pem ]; then
+      CERT_MODE=''
+      openssl ecparam -genkey -name prime256v1 -out ${WORK_DIR}/cert/private.key
+    fi
+
+    cat > ${WORK_DIR}/cert/cert.conf << EOF
 [req]
 distinguished_name = req_distinguished_name
 x509_extensions = v3_req
@@ -3303,17 +3353,18 @@ subjectAltName = @alt_names
 DNS = ${TLS_SERVER}
 EOF
 
-  if [ "$CERT_MODE" != 'naive_only' ]; then
-    openssl req -new -x509 -days 36500 -key ${WORK_DIR}/cert/private.key -out ${WORK_DIR}/cert/cert.pem -config ${WORK_DIR}/cert/cert.conf -extensions v3_req
-    openssl req -new -x509 -days 200 -key ${WORK_DIR}/cert/private.key -out ${WORK_DIR}/cert/cert_200.pem -config ${WORK_DIR}/cert/cert.conf -extensions v3_req
-  else
-    CERT_200_SNI=$(openssl x509 -noout -ext subjectAltName -in "$CERT_200_FILE" 2>/dev/null | awk -F 'DNS:' '/DNS:/{gsub(/,.*/, "", $2); print $2}')
-    if [ ! -s "$CERT_200_FILE" ] || ! openssl x509 -checkend 0 -noout -in "$CERT_200_FILE" >/dev/null 2>&1 || [ "$CERT_200_SNI" != "$TLS_SERVER" ]; then
+    if [ "$CERT_MODE" != 'naive_only' ]; then
+      openssl req -new -x509 -days 36500 -key ${WORK_DIR}/cert/private.key -out ${WORK_DIR}/cert/cert.pem -config ${WORK_DIR}/cert/cert.conf -extensions v3_req
       openssl req -new -x509 -days 200 -key ${WORK_DIR}/cert/private.key -out ${WORK_DIR}/cert/cert_200.pem -config ${WORK_DIR}/cert/cert.conf -extensions v3_req
+    else
+      CERT_200_SNI=$(openssl x509 -noout -ext subjectAltName -in "$CERT_200_FILE" 2>/dev/null | awk -F 'DNS:' '/DNS:/{gsub(/,.*/, "", $2); print $2}')
+      if [ ! -s "$CERT_200_FILE" ] || ! openssl x509 -checkend 0 -noout -in "$CERT_200_FILE" >/dev/null 2>&1 || [ "$CERT_200_SNI" != "$TLS_SERVER" ]; then
+        openssl req -new -x509 -days 200 -key ${WORK_DIR}/cert/private.key -out ${WORK_DIR}/cert/cert_200.pem -config ${WORK_DIR}/cert/cert.conf -extensions v3_req
+      fi
     fi
-  fi
 
-  rm -f ${WORK_DIR}/cert/cert.conf
+    rm -f ${WORK_DIR}/cert/cert.conf
+  fi
 }
 
 # Nginx 配置文件
