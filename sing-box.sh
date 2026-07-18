@@ -5756,6 +5756,155 @@ version() {
   fi
 }
 
+# 申请与管理 Let's Encrypt 证书菜单
+manage_acme_certificate_menu() {
+  clear
+  echo -e "======================================================"
+  if [ "$L" = "C" ]; then
+    echo -e "         Let's Encrypt 证书自动管理工具"
+    echo -e "======================================================"
+    echo -e "1. 申请并安装 Let's Encrypt 证书（自动续期 + 自动生效）"
+    echo -e "2. 强制手动更新/续期证书"
+    echo -e "3. 查看当前证书详情与到期时间"
+    echo -e "0. 返回主菜单"
+    echo -e "======================================================"
+    reading " 请输入选项: " CERT_CHOOSE
+  else
+    echo -e "       Let's Encrypt Certificate Management Tool"
+    echo -e "======================================================"
+    echo -e "1. Apply & Install Let's Encrypt Cert (Auto Renew + Auto Restart)"
+    echo -e "2. Force Manual Renew Cert"
+    echo -e "3. View Current Cert Details & Expiration"
+    echo -e "0. Back to Main Menu"
+    echo -e "======================================================"
+    reading " Please enter your choice: " CERT_CHOOSE
+  fi
+
+  case "$CERT_CHOOSE" in
+    1)
+      if [ "$L" = "C" ]; then
+        reading " 请输入你要申请证书的域名 (例如: ag.dailyfoodguru.com): " CERT_DOMAIN
+      else
+        reading " Please enter the domain name for the cert (e.g. ag.dailyfoodguru.com): " CERT_DOMAIN
+      fi
+
+      if [[ -z "$CERT_DOMAIN" ]]; then
+        [ "$L" = "C" ] && warning "域名不能为空！" || warning "Domain cannot be empty!"
+        sleep 2
+        manage_acme_certificate_menu
+        return
+      fi
+
+      # 检查域名解析
+      [ "$L" = "C" ] && info "开始检查域名解析..." || info "Checking domain DNS resolution..."
+      local RESOLVED_IP=$(ping -c 1 -4 "$CERT_DOMAIN" 2>/dev/null | awk -F '[()]' '/PING/{print $2}')
+      [ -z "$RESOLVED_IP" ] && RESOLVED_IP=$(nslookup "$CERT_DOMAIN" 2>/dev/null | awk '/Address: / {print $2}' | tail -n 1)
+      
+      if [ -z "$RESOLVED_IP" ]; then
+        [ "$L" = "C" ] && warning "域名 $CERT_DOMAIN 无法解析，请确保已添加 DNS 解析！" || warning "Domain $CERT_DOMAIN cannot be resolved. Please make sure DNS is configured!"
+        sleep 3
+        manage_acme_certificate_menu
+        return
+      fi
+
+      # 开始申请并安装
+      [ "$L" = "C" ] && info "检测到域名解析到 IP: $RESOLVED_IP" || info "Detected domain resolves to IP: $RESOLVED_IP"
+      
+      # 安装依赖
+      if command -v apt-get >/dev/null 2>&1; then
+        apt-get update -y && apt-get install -y socat curl >/dev/null 2>&1
+      elif command -v yum >/dev/null 2>&1; then
+        yum install -y socat curl >/dev/null 2>&1
+      fi
+
+      # 安装 acme.sh
+      if [ ! -d "/root/.acme.sh" ]; then
+        curl https://get.acme.sh | sh -s email=my_singbox_acme@gmail.com >/dev/null 2>&1
+      fi
+
+      if [ -x "/root/.acme.sh/acme.sh" ]; then
+        # 临时停止占用 80 端口的服务
+        systemctl stop nginx >/dev/null 2>&1 || true
+        systemctl stop caddy >/dev/null 2>&1 || true
+        systemctl stop sing-box >/dev/null 2>&1 || true
+        
+        # 注册 ACME 账户，设置默认 CA 为 Let's Encrypt
+        /root/.acme.sh/acme.sh --register-account -m my_singbox_acme@gmail.com --server letsencrypt >/dev/null 2>&1
+        /root/.acme.sh/acme.sh --set-default-ca --server letsencrypt >/dev/null 2>&1
+        
+        # 申请证书 (使用 80 端口独立验证模式)
+        /root/.acme.sh/acme.sh --issue -d "$CERT_DOMAIN" --standalone --keylength ec-256 --force
+        
+        # 检查并安装证书
+        if [ -s "/root/.acme.sh/${CERT_DOMAIN}_ecc/${CERT_DOMAIN}.key" ] && [ -s "/root/.acme.sh/${CERT_DOMAIN}_ecc/fullchain.cer" ]; then
+          [ ! -d ${WORK_DIR}/cert ] && mkdir -p ${WORK_DIR}/cert
+          
+          # 通过 acme.sh 官方命令进行安装，设置自动续期 reloadcmd，续期后自动重启 sing-box
+          /root/.acme.sh/acme.sh --install-cert -d "$CERT_DOMAIN" --ecc \
+            --key-file "${WORK_DIR}/cert/private.key" \
+            --fullchain-file "${WORK_DIR}/cert/cert.pem" \
+            --reloadcmd "cp ${WORK_DIR}/cert/cert.pem ${WORK_DIR}/cert/cert_200.pem && systemctl restart sing-box"
+          
+          # 拷贝一份给 NaiveProxy 使用
+          cp "${WORK_DIR}/cert/cert.pem" "${WORK_DIR}/cert/cert_200.pem"
+          
+          # 自动修正现有 inbound 配置文件中的域名
+          for FILE in ${WORK_DIR}/conf/*_inbounds.json; do
+            if [ -s "$FILE" ] && grep -q 'certificate_path' "$FILE"; then
+              sed -i "s/\"server_name\":.*/\"server_name\":\"$CERT_DOMAIN\",/g" "$FILE"
+            fi
+          done
+          
+          [ "$L" = "C" ] && info "Let's Encrypt 证书申请与安装成功！已配置每日自动检查与续期。" || info "Let's Encrypt certificate applied & installed successfully! Auto-renew and restart scheduled."
+        else
+          [ "$L" = "C" ] && error "证书申请失败，请检查服务器 80 端口是否放行，且未被占用！" || error "Certificate application failed. Check if port 80 is open and not in use!"
+        fi
+        
+        # 恢复服务
+        systemctl start nginx >/dev/null 2>&1 || true
+        systemctl start caddy >/dev/null 2>&1 || true
+        systemctl start sing-box >/dev/null 2>&1 || true
+      else
+        [ "$L" = "C" ] && error "未找到 acme.sh，安装失败！" || error "acme.sh not found, installation failed!"
+      fi
+      sleep 4
+      manage_acme_certificate_menu
+      ;;
+    2)
+      # 强制手动更新所有证书
+      if [ -d "/root/.acme.sh" ] && [ -x "/root/.acme.sh/acme.sh" ]; then
+        [ "$L" = "C" ] && info "正在强制更新所有已安装的证书..." || info "Force renewing all installed certificates..."
+        /root/.acme.sh/acme.sh --cron --force
+        [ "$L" = "C" ] && info "更新检查完毕！" || info "Renew check finished!"
+      else
+        [ "$L" = "C" ] && warning "未安装 acme.sh，请先选择选项 1 申请并安装证书。" || warning "acme.sh is not installed. Please choose Option 1 first."
+      fi
+      sleep 3
+      manage_acme_certificate_menu
+      ;;
+    3)
+      # 查看证书状态
+      if [ -s "${WORK_DIR}/cert/cert.pem" ]; then
+        [ "$L" = "C" ] && info "--- 当前 Sing-box 正在使用的证书详情 ---" || info "--- Details of certificate currently used by Sing-box ---"
+        openssl x509 -in "${WORK_DIR}/cert/cert.pem" -text -noout | grep -E 'Subject:|Issuer:|Not After|DNS:'
+      else
+        [ "$L" = "C" ] && warning "未找到已安装的证书文件。" || warning "No installed certificate found."
+      fi
+      reading "\n按任意键返回... " TEMP_KEY
+      manage_acme_certificate_menu
+      ;;
+    0)
+      menu_setting
+      menu
+      ;;
+    *)
+      [ "$L" = "C" ] && warning "无效的选项！" || warning "Invalid option!"
+      sleep 2
+      manage_acme_certificate_menu
+      ;;
+  esac
+}
+
 # 判断当前 Sing-box 的运行状态，并对应的给菜单和动作赋值
 menu_setting() {
   if [[ "${STATUS[0]}" =~ $(text 27)|$(text 28) ]]; then
@@ -5771,6 +5920,7 @@ menu_setting() {
     OPTION[10]="10.  $(text 59)"
     OPTION[11]="11.  $(text 69)"
     OPTION[12]="12.  $(text 76)"
+    [ "$L" = "C" ] && OPTION[13]="13.  申请/管理 Let's Encrypt 证书" || OPTION[13]="13.  Apply/Manage Let's Encrypt Certificate"
 
     ACTION[1]() { export_list; exit 0; }
 
@@ -5806,6 +5956,7 @@ menu_setting() {
     ACTION[10]() { bash <(wget --no-check-certificate -qO- ${GH_PROXY}https://raw.githubusercontent.com/fscarmen/argox/main/argox.sh) -$L; exit; }
     ACTION[11]() { bash <(wget --no-check-certificate -qO- ${GH_PROXY}https://raw.githubusercontent.com/fscarmen/sba/main/sba.sh) -$L; exit; }
     ACTION[12]() { bash <(wget --no-check-certificate -qO- https://tcp.hy2.sh/); exit; }
+    ACTION[13]() { manage_acme_certificate_menu; exit; }
   else
     OPTION[1]="1.  $(text 115)"
     OPTION[2]="2.  $(text 34) + Argo + $(text 80) $(text 89)"
