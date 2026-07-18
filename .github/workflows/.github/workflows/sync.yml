@@ -1,0 +1,32 @@
+name: Sync Upstream
+
+    on:
+      schedule:
+        - cron: '0 0 * * *' # 每天 UTC 时间 0:00 (北京时间早上 8:00) 自动运行
+      workflow_dispatch: # 支持手动触发同步
+
+    jobs:
+      sync:
+        runs-on: ubuntu-latest
+        steps:
+          - name: Checkout Target Repository
+            uses: actions/checkout@v4
+            with:
+              ref: main # 你的主分支名，如果是 master 请修改为 master
+              fetch-depth: 0
+
+          - name: Sync Upstream
+            run: |
+              git config --global user.name "GitHub Action"
+              git config --global user.email "action@github.com"
+
+              # 添加原作者的上游源
+              git remote add upstream https://github.com/fscarmen/sing-box.git
+              git fetch upstream
+
+              # 合并上游 main 分支，如果发生冲突，保留你自己的修改 (ours 策略)
+              # 这样你对脚本中证书和协议的改动不会被原作者的更新覆盖
+              git merge upstream/main -m "Sync upstream updates" --strategy-option ours || true
+
+              # 推送到你的仓库
+              git push origin main
