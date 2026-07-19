@@ -5910,8 +5910,11 @@ manage_acme_certificate_menu() {
           # 拷贝一份给 NaiveProxy 使用
           cp "${WORK_DIR}/cert/cert.pem" "${WORK_DIR}/cert/cert_200.pem"
 
-          # 自动修正现有 inbound 配置文件中的域名
+          # 自动修正现有 inbound 配置文件中的域名 (排除 argo 隧道相关的 vmess-ws 和 vless-ws-tls)
           for FILE in ${WORK_DIR}/conf/*_inbounds.json; do
+            if [[ "$FILE" =~ "vless-ws-tls" ]]; then
+              continue
+            fi
             if [ -s "$FILE" ] && grep -q 'certificate_path' "$FILE"; then
               sed -i "s/\"server_name\":.*/\"server_name\":\"$CERT_DOMAIN\",/g" "$FILE"
             fi
@@ -5983,8 +5986,11 @@ manage_acme_certificate_menu() {
         [ "$L" = "C" ] && info "正在重新生成默认自签证书 (addons.mozilla.org)..." || info "Re-generating default self-signed cert (addons.mozilla.org)..."
         ssl_certificate "addons.mozilla.org"
         
-        # 恢复现有配置文件中的域名为 addons.mozilla.org
+        # 恢复现有配置文件中的域名为 addons.mozilla.org (排除 argo 隧道相关的 vmess-ws 和 vless-ws-tls)
         for FILE in ${WORK_DIR}/conf/*_inbounds.json; do
+          if [[ "$FILE" =~ "vless-ws-tls" ]]; then
+            continue
+          fi
           if [ -s "$FILE" ] && grep -q 'certificate_path' "$FILE"; then
             sed -i 's/"server_name":.*/"server_name":"addons.mozilla.org",/g' "$FILE"
           fi
