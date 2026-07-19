@@ -4563,9 +4563,10 @@ export_list() {
   local CERT_URL_2=$(awk '{printf "%s\\r\\n", $0}' ${WORK_DIR}/cert/cert.pem)
 
   local IS_COMMERCIAL_CERT=false
-  local ISSUER=$(openssl x509 -in ${WORK_DIR}/cert/cert.pem -issuer -noout 2>/dev/null)
-  if grep -q -i "Let's Encrypt" <<< "$ISSUER"; then
-    IS_COMMERCIAL_CERT=true
+  if [ -s "${WORK_DIR}/cert/cert.pem" ]; then
+    if openssl verify "${WORK_DIR}/cert/cert.pem" >/dev/null 2>&1; then
+      IS_COMMERCIAL_CERT=true
+    fi
   fi
 
   local CLASH_FP=""
