@@ -6326,6 +6326,7 @@ elif [ "$IS_FAST_INSTALL" = 'is_fast_install' ]; then
   export_list install
   create_shortcut
 else
+  create_shortcut >/dev/null 2>&1
   menu_setting
   menu
 fi
