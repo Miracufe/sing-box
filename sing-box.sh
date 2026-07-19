@@ -5905,7 +5905,7 @@ manage_acme_certificate_menu() {
           /root/.acme.sh/acme.sh --install-cert -d "$CERT_DOMAIN" --ecc \
             --key-file "${WORK_DIR}/cert/private.key" \
             --fullchain-file "${WORK_DIR}/cert/cert.pem" \
-            --reloadcmd "cp ${WORK_DIR}/cert/cert.pem ${WORK_DIR}/cert/cert_200.pem && systemctl restart sing-box"
+            --reloadcmd "cp ${WORK_DIR}/cert/cert.pem ${WORK_DIR}/cert/cert_200.pem && systemctl restart sing-box && (systemctl reload nginx || true)"
 
           # 拷贝一份给 NaiveProxy 使用
           cp "${WORK_DIR}/cert/cert.pem" "${WORK_DIR}/cert/cert_200.pem"
