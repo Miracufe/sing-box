@@ -5970,6 +5970,9 @@ manage_acme_certificate_menu() {
         [ "$L" = "C" ] && info "正在清理 acme.sh 证书续期计划..." || info "Cleaning up acme.sh cert schedule..."
         if [ -n "$CURRENT_DOMAIN" ] && [ -x "/root/.acme.sh/acme.sh" ]; then
           /root/.acme.sh/acme.sh --remove -d "$CURRENT_DOMAIN" --ecc >/dev/null 2>&1 || true
+          if [ -d "/root/.acme.sh/${CURRENT_DOMAIN}_ecc" ]; then
+            rm -rf "/root/.acme.sh/${CURRENT_DOMAIN}_ecc"
+          fi
         fi
 
         [ "$L" = "C" ] && info "正在重新生成默认自签证书 (addons.mozilla.org)..." || info "Re-generating default self-signed cert (addons.mozilla.org)..."
