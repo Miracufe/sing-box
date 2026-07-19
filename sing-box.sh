@@ -5269,10 +5269,15 @@ $(${WORK_DIR}/qrencode $SUBSCRIBE_ADDRESS/${UUID_CONFIRM}/auto2)
 
 # 创建快捷方式
 create_shortcut() {
-  cat > ${WORK_DIR}/sb.sh << EOF
+  cat > ${WORK_DIR}/sb.sh << 'EOF'
 #!/usr/bin/env bash
-
-bash <(wget --no-check-certificate -qO- https://raw.githubusercontent.com/Miracufe/sing-box/main/sing-box.sh) \$@
+SCRIPT_CONTENT=$(wget -T 10 -t 2 --no-check-certificate -qO- https://raw.githubusercontent.com/Miracufe/sing-box/main/sing-box.sh)
+if [ -n "$SCRIPT_CONTENT" ]; then
+  bash <(printf '%s\n' "$SCRIPT_CONTENT") "$@"
+else
+  echo -e "\033[31mError: Failed to fetch the sing-box.sh script from GitHub.\033[0m"
+  echo -e "Please check if the URL 'https://raw.githubusercontent.com/Miracufe/sing-box/main/sing-box.sh' is accessible."
+fi
 EOF
   chmod +x ${WORK_DIR}/sb.sh
   ln -sf ${WORK_DIR}/sb.sh /usr/bin/sb
