@@ -5777,20 +5777,36 @@ manage_acme_certificate_menu() {
         return
       fi
 
-      # 检查域名解析
+      # 验证解析
       [ "$L" = "C" ] && info "开始检查域名解析..." || info "Checking domain DNS resolution..."
       local RESOLVED_IP=$(ping -c 1 -4 "$CERT_DOMAIN" 2>/dev/null | awk -F '[()]' '/PING/{print $2}')
       [ -z "$RESOLVED_IP" ] && RESOLVED_IP=$(nslookup "$CERT_DOMAIN" 2>/dev/null | awk '/Address: / {print $2}' | tail -n 1)
 
-      if [ -z "$RESOLVED_IP" ]; then
-        [ "$L" = "C" ] && warning "域名 $CERT_DOMAIN 无法解析，请确保已添加 DNS 解析！" || warning "Domain $CERT_DOMAIN cannot be resolved. Please make sure DNS is configured!"
-        sleep 3
-        manage_acme_certificate_menu
-        return
+      # 选择申请验证方式
+      local ACME_MODE=""
+      if [ "$L" = "C" ]; then
+        echo -e "请选择证书申请验证方式 / Choose validation method:"
+        echo -e "1. HTTP-01 验证 (独立 80 端口模式，需临时停用 80 端口服务)"
+        echo -e "2. DNS-01 验证 (Cloudflare DNS API 模式，免占用 80 端口/免停机)"
+        reading " 请选择 [1-2] (默认 1): " ACME_MODE
+      else
+        echo -e "Please choose certificate validation method:"
+        echo -e "1. HTTP-01 Validation (Standalone Port 80, requires temporary downtime)"
+        echo -e "2. DNS-01 Validation (Cloudflare DNS API, zero-downtime)"
+        reading " Please choose [1-2] (default 1): " ACME_MODE
       fi
+      ACME_MODE=${ACME_MODE:-1}
 
-      # 开始申请并安装
-      [ "$L" = "C" ] && info "检测到域名解析到 IP: $RESOLVED_IP" || info "Detected domain resolves to IP: $RESOLVED_IP"
+      if [ "$ACME_MODE" = "1" ]; then
+        # HTTP-01 的域名解析检查（不可省）
+        if [ -z "$RESOLVED_IP" ]; then
+          [ "$L" = "C" ] && warning "域名 $CERT_DOMAIN 无法解析，请确保已添加 DNS 解析！" || warning "Domain $CERT_DOMAIN cannot be resolved. Please make sure DNS is configured!"
+          sleep 3
+          manage_acme_certificate_menu
+          return
+        fi
+        [ "$L" = "C" ] && info "检测到域名解析到 IP: $RESOLVED_IP" || info "Detected domain resolves to IP: $RESOLVED_IP"
+      fi
 
       # 安装依赖
       if command -v apt-get >/dev/null 2>&1; then
@@ -5805,24 +5821,86 @@ manage_acme_certificate_menu() {
       fi
 
       if [ -x "/root/.acme.sh/acme.sh" ]; then
-        # 临时停止占用 80 端口的服务
-        systemctl stop nginx >/dev/null 2>&1 || true
-        systemctl stop caddy >/dev/null 2>&1 || true
-        systemctl stop sing-box >/dev/null 2>&1 || true
-
         # 注册 ACME 账户，设置默认 CA 为 Let's Encrypt
         /root/.acme.sh/acme.sh --register-account -m my_singbox_acme@gmail.com --server letsencrypt >/dev/null 2>&1
         /root/.acme.sh/acme.sh --set-default-ca --server letsencrypt >/dev/null 2>&1
 
-        # 申请证书 (使用 80 端口独立验证模式)
-        /root/.acme.sh/acme.sh --issue -d "$CERT_DOMAIN" --standalone --keylength ec-256 --force
+        if [ "$ACME_MODE" = "1" ]; then
+          # 临时停止占用 80 端口的服务
+          systemctl stop nginx >/dev/null 2>&1 || true
+          systemctl stop caddy >/dev/null 2>&1 || true
+          systemctl stop sing-box >/dev/null 2>&1 || true
+
+          # 申请证书 (HTTP-01, standalone 且配置自动续签 pre-hook / post-hook)
+          /root/.acme.sh/acme.sh --issue -d "$CERT_DOMAIN" --standalone --keylength ec-256 --force \
+            --pre-hook "systemctl stop nginx caddy sing-box" \
+            --post-hook "systemctl start nginx caddy sing-box"
+        else
+          # DNS-01 Mode, 收集 credentials
+          local CF_CRED_CHOOSE=""
+          local CF_TOKEN_INPUT=""
+          local CF_KEY_INPUT=""
+          local CF_EMAIL_INPUT=""
+          if [ "$L" = "C" ]; then
+            echo -e "请选择 Cloudflare 凭据类型:"
+            echo -e "1. 使用 API Token (推荐)"
+            echo -e "2. 使用 Global API Key"
+            reading " 请选择 [1-2] (默认 1): " CF_CRED_CHOOSE
+          else
+            echo -e "Choose Cloudflare credentials type:"
+            echo -e "1. Use API Token (Recommended)"
+            echo -e "2. Use Global API Key"
+            reading " Please choose [1-2] (default 1): " CF_CRED_CHOOSE
+          fi
+          CF_CRED_CHOOSE=${CF_CRED_CHOOSE:-1}
+
+          if [ "$CF_CRED_CHOOSE" = "1" ]; then
+            if [ "$L" = "C" ]; then
+              reading " 请输入 Cloudflare API Token: " CF_TOKEN_INPUT
+            else
+              reading " Please enter Cloudflare API Token: " CF_TOKEN_INPUT
+            fi
+            if [ -z "$CF_TOKEN_INPUT" ]; then
+              [ "$L" = "C" ] && warning "Token 不能为空！" || warning "Token cannot be empty!"
+              sleep 2
+              manage_acme_certificate_menu
+              return
+            fi
+            export CF_Token="$CF_TOKEN_INPUT"
+            unset CF_Key
+            unset CF_Email
+          else
+            if [ "$L" = "C" ]; then
+              reading " 请输入 Cloudflare 账户 Email: " CF_EMAIL_INPUT
+              reading " 请输入 Cloudflare Global API Key: " CF_KEY_INPUT
+            else
+              reading " Please enter Cloudflare Email: " CF_EMAIL_INPUT
+              reading " Please enter Cloudflare Global API Key: " CF_KEY_INPUT
+            fi
+            if [ -z "$CF_EMAIL_INPUT" ] || [ -z "$CF_KEY_INPUT" ]; then
+              [ "$L" = "C" ] && warning "Email 或 Key 不能为空！" || warning "Email or Key cannot be empty!"
+              sleep 2
+              manage_acme_certificate_menu
+              return
+            fi
+            export CF_Email="$CF_EMAIL_INPUT"
+            export CF_Key="$CF_KEY_INPUT"
+            unset CF_Token
+          fi
+
+          # 申请证书 (DNS-01 CF 验证)
+          /root/.acme.sh/acme.sh --issue --dns dns_cf -d "$CERT_DOMAIN" --keylength ec-256 --force
+        fi
 
         # 检查并安装证书
         if [ -s "/root/.acme.sh/${CERT_DOMAIN}_ecc/${CERT_DOMAIN}.key" ] && [ -s "/root/.acme.sh/${CERT_DOMAIN}_ecc/fullchain.cer" ]; then
           [ ! -d ${WORK_DIR}/cert ] && mkdir -p ${WORK_DIR}/cert
 
           # 通过 acme.sh 官方命令进行安装，设置自动续期 reloadcmd，续期后自动重启 sing-box
-          /root/.acme.sh/acme.sh --install-cert -d "$CERT_DOMAIN" --ecc             --key-file "${WORK_DIR}/cert/private.key"             --fullchain-file "${WORK_DIR}/cert/cert.pem"             --reloadcmd "cp ${WORK_DIR}/cert/cert.pem ${WORK_DIR}/cert/cert_200.pem && systemctl restart sing-box"
+          /root/.acme.sh/acme.sh --install-cert -d "$CERT_DOMAIN" --ecc \
+            --key-file "${WORK_DIR}/cert/private.key" \
+            --fullchain-file "${WORK_DIR}/cert/cert.pem" \
+            --reloadcmd "cp ${WORK_DIR}/cert/cert.pem ${WORK_DIR}/cert/cert_200.pem && systemctl restart sing-box"
 
           # 拷贝一份给 NaiveProxy 使用
           cp "${WORK_DIR}/cert/cert.pem" "${WORK_DIR}/cert/cert_200.pem"
@@ -5830,19 +5908,25 @@ manage_acme_certificate_menu() {
           # 自动修正现有 inbound 配置文件中的域名
           for FILE in ${WORK_DIR}/conf/*_inbounds.json; do
             if [ -s "$FILE" ] && grep -q 'certificate_path' "$FILE"; then
-              sed -i "s/"server_name":.*/"server_name":"$CERT_DOMAIN",/g" "$FILE"
+              sed -i "s/\"server_name\":.*/\"server_name\":\"$CERT_DOMAIN\",/g" "$FILE"
             fi
           done
 
           [ "$L" = "C" ] && info "Let's Encrypt 证书申请与安装成功！已配置每日自动检查与续期。" || info "Let's Encrypt certificate applied & installed successfully! Auto-renew and restart scheduled."
         else
-          [ "$L" = "C" ] && error "证书申请失败，请检查服务器 80 端口是否放行，且未被占用！" || error "Certificate application failed. Check if port 80 is open and not in use!"
+          if [ "$ACME_MODE" = "1" ]; then
+            [ "$L" = "C" ] && error "证书申请失败，请检查服务器 80 端口是否放行，且未被占用！" || error "Certificate application failed. Check if port 80 is open and not in use!"
+          else
+            [ "$L" = "C" ] && error "证书申请失败，请检查 Cloudflare Token/Key 是否正确，且域名解析是否在 CF 托管！" || error "Certificate application failed. Check if Cloudflare Token/Key is correct and domain is managed by CF!"
+          fi
         fi
 
-        # 恢复服务
-        systemctl start nginx >/dev/null 2>&1 || true
-        systemctl start caddy >/dev/null 2>&1 || true
-        systemctl start sing-box >/dev/null 2>&1 || true
+        # 恢复服务 (仅 HTTP-01 模式需要手动拉起，DNS 模式下无需拉起，因为没有停止过)
+        if [ "$ACME_MODE" = "1" ]; then
+          systemctl start nginx >/dev/null 2>&1 || true
+          systemctl start caddy >/dev/null 2>&1 || true
+          systemctl start sing-box >/dev/null 2>&1 || true
+        fi
       else
         [ "$L" = "C" ] && error "未找到 acme.sh，安装失败！" || error "acme.sh not found, installation failed!"
       fi
