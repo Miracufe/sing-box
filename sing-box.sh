@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # 当前脚本版本号
-VERSION='v1.3.18 (2026.07.28)'
+VERSION='v1.3.19 (2026.08.02)'
 
 # Github 反代加速代理
 GITHUB_PROXY=('https://hub.glowp.xyz/' 'https://proxy.vvvv.ee/')
@@ -40,8 +40,8 @@ mkdir -p "$TEMP_DIR"
 
 E[0]="Language:\n 1. English (default) \n 2. 简体中文"
 C[0]="${E[0]}"
-E[1]="1. Add bind_interface option in sb -d menu to bind outbound traffic to a specific NIC; 2. Add enable/disable subscriptions option in sb -d menu 2. Change v2rayN Hysteria2 Realm config from Finalmask field to ProtoExtraObj; 3. add SIGHUP hot-reload support, replace restart sequences with reload; 4. force base-config regeneration on upgrade to guarantee sing-box check passes"
-C[1]="1. sb -d 菜单新增「指定网络出口」选项，可为出站流量绑定特定网卡; 2. sb -d 菜单新增 「订阅开关」，可随时开启关闭订阅; 3. v2rayN 的 Hysteria2 Realm 配置从 Finalmask 字段改为 ProtoExtraObj; 4. 新增 SIGHUP 热更支持，用 reload 替换重启流程; 4. 新增 SIGHUP 热更支持，用 reload 替换重启流程; 5. 升级时强制重置基础配置至新版格式，保证兼容性"
+E[1]="1. Add bind_interface option in sb -d menu to bind outbound traffic to a specific NIC; 2. Add enable/disable subscriptions option in sb -d menu 3. Change v2rayN Hysteria2 Realm config from Finalmask field to ProtoExtraObj; 4. add SIGHUP hot-reload support, replace restart sequences with reload; 5. force base-config regeneration on upgrade to guarantee sing-box check passes; 6. Add real-time traffic stats (-n / main menu)"
+C[1]="1. sb -d 菜单新增「指定网络出口」选项，可为出站流量绑定特定网卡; 2. sb -d 菜单新增 「订阅开关」，可随时开启关闭订阅; 3. v2rayN 的 Hysteria2 Realm 配置从 Finalmask 字段改为 ProtoExtraObj; 4. 新增 SIGHUP 热更支持，用 reload 替换重启流程; 4. 新增 SIGHUP 热更支持，用 reload 替换重启流程; 5. 升级时强制重置基础配置至新版格式，保证兼容性; 6. 添加实时流量统计 (-n / 主菜单)"
 E[2]="Downloading Sing-box. Please wait a seconds ..."
 C[2]="下载 Sing-box 中，请稍等 ..."
 E[3]="Input errors up to 5 times.The script is aborted."
@@ -98,8 +98,8 @@ E[28]="open"
 C[28]="开启"
 E[29]="View links (sb -n)"
 C[29]="查看节点信息 (sb -n)"
-E[30]="Listen ports  (current: \${_val})"
-C[30]="监听端口  (当前: \${_val})"
+E[30]="Listen ports  (current: \${VAL_ITEM})"
+C[30]="监听端口  (当前: \${VAL_ITEM})"
 E[31]="Sync Sing-box to the latest version (sb -v)"
 C[31]="同步 Sing-box 至最新版本 (sb -v)"
 E[32]="Upgrade kernel, turn on BBR, change Linux system (sb -b)"
@@ -134,8 +134,8 @@ E[46]="Warp / warp-go was detected to be running. Please enter the correct serve
 C[46]="检测到 warp / warp-go 正在运行，请输入确认的服务器 IP:"
 E[47]="No server ip, script exits. Feedback:[https://github.com/fscarmen/sing-box/issues]"
 C[47]="没有 server ip，脚本退出，问题反馈:[https://github.com/fscarmen/sing-box/issues]"
-E[48]="Client Fingerprint  (current: \${_val})"
-C[48]="客户端指纹  (当前: \${_val})"
+E[48]="Client Fingerprint  (current: \${VAL_ITEM})"
+C[48]="客户端指纹  (当前: \${VAL_ITEM})"
 E[49]="Select more protocols to install (e.g. hgbd). The order of the port numbers of the protocols is related to the ordering of the multiple choices:\n a. all (default)"
 C[49]="多选需要安装协议(比如 hgbd)，协议的端口号次序与多选的排序有关:\n a. all (默认)"
 E[50]="Please enter the \$TYPE domain name:"
@@ -172,8 +172,8 @@ E[65]="Open Realm"
 C[65]="开启 Realm"
 E[66]="Please select the protocols to be added (multiple choices possible. Press Enter to skip):"
 C[66]="请选择需要增加的协议（可以多选，回车跳过）:"
-E[67]="Bind network interface  (current: \${_val:-default})"
-C[67]="指定网络出口  (当前: \${_val:-默认})"
+E[67]="Bind network interface  (current: \${VAL_ITEM:-default})"
+C[67]="指定网络出口  (当前: \${VAL_ITEM:-默认})"
 E[68]="Press [n] if there is an error, other keys to continue:"
 C[68]="如有错误请按 [n]，其他键继续:"
 E[69]="Install sba scripts (argo + sing-box) [https://github.com/fscarmen/sba]"
@@ -184,8 +184,8 @@ E[71]="Create shortcut [ sb ] successfully."
 C[71]="创建快捷 [ sb ] 指令成功!"
 E[72]="Path to each client configuration file: ${WORK_DIR}/subscribe/\n The full template can be found at:\n https://github.com/chika0801/sing-box-examples/tree/main/Tun"
 C[72]="各客户端配置文件路径: ${WORK_DIR}/subscribe/\n 完整模板可参照:\n https://github.com/chika0801/sing-box-examples/tree/main/Tun"
-E[73]="There is no protocol left, if you are sure please re-run [ sb -u ] to uninstall all."
-C[73]="没有协议剩下，如确定请重新执行 [ sb -u ] 卸载所有"
+E[73]=""
+C[73]=""
 E[74]="Keep protocols"
 C[74]="保留协议"
 E[75]="Add protocols"
@@ -258,8 +258,8 @@ E[108]="Enable subscription"
 C[108]="开启订阅"
 E[109]="Disable subscription"
 C[109]="关闭订阅"
-E[110]="No CDN protocol is currently in use"
-C[110]="当前没有使用 CDN 的协议"
+E[110]=""
+C[110]=""
 E[111]="Update base configuration? (Node configs will remain unaffected; only log, outbounds, endpoints, route, experimental, dns, ntp, http_clients, etc., will be reset) [Y/n]:"
 C[111]="是否更新基础配置？（不影响节点配置，仅重置 log、outbounds、endpoints、route、experimental、dns、ntp、http_clients）[Y/n]:"
 E[112]="Change complete"
@@ -294,16 +294,16 @@ E[126]="Network request URL structure is wrong. Missing Zone ID"
 C[126]="网络请求地址（URL）结构不对，缺少 Zone ID"
 E[127]="Please select what to modify:"
 C[127]="请选择修改项目:"
-E[128]="Preferred CDN  (current: \${_val})"
-C[128]="优选域名/IP  (当前: \${_val})"
-E[129]="Reality SNI  (current: \${_val})"
-C[129]="Reality SNI  (当前: \${_val})"
-E[130]="Node name  (current: \${_val})"
-C[130]="节点名称  (当前: \${_val})"
-E[131]="UUID / Password  (current: \${_val})"
-C[131]="UUID / 密码  (当前: \${_val})"
-E[132]="Server IP  (current: \${_val})"
-C[132]="服务器 IP  (当前: \${_val})"
+E[128]="Preferred CDN  (current: \${VAL_ITEM})"
+C[128]="优选域名/IP  (当前: \${VAL_ITEM})"
+E[129]="Reality SNI  (current: \${VAL_ITEM})"
+C[129]="Reality SNI  (当前: \${VAL_ITEM})"
+E[130]="Node name  (current: \${VAL_ITEM})"
+C[130]="节点名称  (当前: \${VAL_ITEM})"
+E[131]="UUID / Password  (current: \${VAL_ITEM})"
+C[131]="UUID / 密码  (当前: \${VAL_ITEM})"
+E[132]="Server IP  (current: \${VAL_ITEM})"
+C[132]="服务器 IP  (当前: \${VAL_ITEM})"
 E[133]="Invalid IP address format"
 C[133]="IP 地址格式错误"
 E[134]="Please enter new value (press Enter to skip):"
@@ -370,44 +370,44 @@ reading() { read -rp "$(info "$1")" "$2"; }
 
 # 预处理：扫描 E/C 数组，把含 $ 的条目下标记录到关联数组，避免 text() 每次调用都启动 grep 子进程
 declare -A TEXT_NEEDS_EVAL
-for _text_i in "${!E[@]}"; do
-  [[ "${E[${_text_i}]}" == *'$'* || "${C[${_text_i}]}" == *'$'* ]] && TEXT_NEEDS_EVAL[${_text_i}]=1
+for TEXT_I in "${!E[@]}"; do
+  [[ "${E[${TEXT_I}]}" == *'$'* || "${C[${TEXT_I}]}" == *'$'* ]] && TEXT_NEEDS_EVAL[${TEXT_I}]=1
 done
-unset _text_i
+unset TEXT_I
 
 # text <index>：输出当前语言对应的字符串，含 $ 变量的条目用 eval 展开，其余直接 printf
 text() {
-  local -n _text_arr="${L}"        # nameref 指向 E 或 C，零子进程
-  local _text_val="${_text_arr[$*]}"
+  local -n TEXT_ARR="${L}"        # nameref 指向 E 或 C，零子进程
+  local TEXT_VAL="${TEXT_ARR[$*]}"
   if [[ -n "${TEXT_NEEDS_EVAL[$*]}" ]]; then
-    eval "printf '%s' \"${_text_val}\""
+    eval "printf '%s' \"${TEXT_VAL}\""
   else
-    printf '%s' "${_text_val}"
+    printf '%s' "${TEXT_VAL}"
   fi
 }
 
 # 根据 INSTALL_PROTOCOLS 计算安装流程总步骤数
 # sing-box 协议分类：Reality 类 (b/j/k)、Hysteria2(c)、WS 类 (h/i)
 calc_install_steps() {
-  local _total=5  # 固定步骤：协议选择、起始端口、VPS IP、UUID、节点名
+  local STEP_TOTAL=5  # 固定步骤：协议选择、起始端口、VPS IP、UUID、节点名
   local HAS_REALITY=false HAS_WS=false HAS_HY2=false
-  for _P in "${INSTALL_PROTOCOLS[@]}"; do
-    [[ "$_P" =~ ^[bjk]$ ]] && HAS_REALITY=true
-    [[ "$_P" =~ ^[hi]$ ]] && HAS_WS=true
-    [[ "$_P" == 'c' ]] && HAS_HY2=true
+  for PROTO in "${INSTALL_PROTOCOLS[@]}"; do
+    [[ "$PROTO" =~ ^[bjk]$ ]] && HAS_REALITY=true
+    [[ "$PROTO" =~ ^[hi]$ ]] && HAS_WS=true
+    [[ "$PROTO" == 'c' ]] && HAS_HY2=true
   done
-  [[ "$IS_SUB" = 'is_sub' || "$IS_ARGO" = 'is_argo' ]] && (( _total++ ))  # nginx 端口
-  $HAS_REALITY && (( _total++ ))                # Reality 私钥
-  $HAS_WS && (( _total++ ))                     # CDN / 域名
+  [[ "$IS_SUB" = 'is_sub' || "$IS_ARGO" = 'is_argo' ]] && (( STEP_TOTAL++ ))  # nginx 端口
+  $HAS_REALITY && (( STEP_TOTAL++ ))                # Reality 私钥
+  $HAS_WS && (( STEP_TOTAL++ ))                     # CDN / 域名
   # Hysteria2 Realm / WARP / Port Hopping are protocol sub-options and are not counted as install steps.
-  [ "$IS_ARGO" = 'is_argo' ] && (( _total++ ))  # Argo 域名
-  TOTAL_STEPS=$_total
+  [ "$IS_ARGO" = 'is_argo' ] && (( STEP_TOTAL++ ))  # Argo 域名
+  TOTAL_STEPS=$STEP_TOTAL
 }
 
 # 检测是否需要启用 Github CDN，如能直接连通 api.github.com，则不使用
 check_cdn() {
   local PROXY CODE PID CMD
-  local _WAIT_COUNT=40
+  local WAIT_COUNT=40
   local PIDS=()
   local API_URL='https://api.github.com/repos/SagerNet/sing-box/releases'
 
@@ -421,13 +421,13 @@ check_cdn() {
     return
   fi
 
-  # 获取 HTTP 状态码
+  # 获取 HTTP 状态码（HEAD 探测：只取响应头，不下载 body；--tries=1 避免被墙时 wget 默认 20 次重试放大延迟）
   get_code() {
     local url=$1
     if [ "$CMD" = 'wget' ]; then
-      wget -qT5 -O /dev/null --server-response "$url" 2>&1 | awk '/HTTP\//{code=$2} END{print code}'
+      wget -q --spider --tries=1 -T5 -O /dev/null --server-response "$url" 2>&1 | awk '/HTTP\//{code=$2} END{print code}'
     else
-      curl -skL -w "%{http_code}" "$url" -o /dev/null
+      curl -skL -I --connect-timeout 3 --max-time 5 -o /dev/null -w '%{http_code}' "$url"
     fi
   }
 
@@ -448,9 +448,9 @@ check_cdn() {
   done
 
   # 等第一个返回 200 的代理，超时则回退为直连，避免无限等待卡死
-  while [ ! -e "${TEMP_DIR}/cdn_proxy" ] && [ "$_WAIT_COUNT" -gt 0 ]; do
+  while [ ! -e "${TEMP_DIR}/cdn_proxy" ] && [ "$WAIT_COUNT" -gt 0 ]; do
     sleep 0.05
-    (( _WAIT_COUNT-- )) || true
+    (( WAIT_COUNT-- )) || true
   done
 
   [ -e "${TEMP_DIR}/cdn_proxy" ] && GH_PROXY=$(cat "${TEMP_DIR}/cdn_proxy") || GH_PROXY=''
@@ -617,6 +617,28 @@ input_uuid() {
   UUID_CONFIRM=${UUID_CONFIRM:-"$UUID_DEFAULT"}
 }
 
+input_node_name() {
+  # 输入节点名，以系统的 hostname 作为默认（新安装 / 无既有协议重新添加时询问）
+  local NODE_NAME_INPUT=''
+  if [ -z "$NODE_NAME_CONFIRM" ]; then
+    local EMOJI="${EMOJI4:-$EMOJI6}"
+    local EMOJI="${EMOJI}${EMOJI:+ }"
+    if command -v hostname >/dev/null 2>&1; then
+      local NODE_NAME_DEFAULT="${EMOJI}$(hostname)"
+    elif [ -s /etc/hostname ]; then
+      local NODE_NAME_DEFAULT="${EMOJI}$(cat /etc/hostname)"
+    else
+      local NODE_NAME_DEFAULT="${EMOJI}Sing-Box"
+    fi
+    [[ "$IS_FAST_INSTALL" = 'is_fast_install' || "$NONINTERACTIVE_INSTALL" = 'noninteractive_install' ]] && NODE_NAME_CONFIRM="${NODE_NAME_DEFAULT}"
+    if [ -z "$NODE_NAME_CONFIRM" ]; then
+      (( STEP_NUM++ )) || true
+      reading "\n ${TOTAL_STEPS:+(${STEP_NUM}/${TOTAL_STEPS}) }$(text 13) " NODE_NAME_INPUT
+    fi
+    grep -q '^$' <<< "$NODE_NAME_INPUT" && NODE_NAME_CONFIRM="$NODE_NAME_DEFAULT" || NODE_NAME_CONFIRM="${EMOJI}${NODE_NAME_INPUT}"
+  fi
+}
+
 # 更换优选域名 / reality SNI / 节点名 / UUID
 change_config() {
   [ ! -d "${WORK_DIR}" ] && error " $(text 107) "
@@ -639,11 +661,11 @@ change_config() {
   fi
 
   # 节点名
-  local NAME_NOW=$(awk '/"tag"/{gsub(/^.*"tag": *"/,""); gsub(/".*/,""); sub(/ [^ ]*$/,""); print; exit}' ${WORK_DIR}/conf/*_inbounds.json)
+  local NAME_NOW=$(awk '/"tag"/{gsub(/^.*"tag": *"/,""); gsub(/".*/,""); sub(/ [^ ]*$/,""); print; exit}' ${WORK_DIR}/conf/*_inbounds.json 2>/dev/null)
   [ -n "$NAME_NOW" ] && MENU_IDX+=(130) && MENU_KEY+=(name) && MENU_VAL+=("$NAME_NOW")
 
   # UUID / Password
-  local UUID_NOW="$(awk -F'"' '/"uuid"[[:space:]]*:[[:space:]]*"/ || /"id"[[:space:]]*:[[:space:]]*"/ {print $4; exit}' ${WORK_DIR}/conf/*_inbounds.json)"
+  local UUID_NOW="$(awk -F'"' '/"uuid"[[:space:]]*:[[:space:]]*"/ || /"id"[[:space:]]*:[[:space:]]*"/ {print $4; exit}' ${WORK_DIR}/conf/*_inbounds.json 2>/dev/null)"
   [ -n "$UUID_NOW" ] && MENU_IDX+=(131) && MENU_KEY+=(uuid) && MENU_VAL+=("$UUID_NOW")
 
   # 服务器 IP
@@ -700,15 +722,15 @@ change_config() {
     MENU_IDX+=(150) && MENU_KEY+=(customroute) && MENU_VAL+=("${CUSTOM_ROUTE_COUNT}")
   }
 
-  [ "${#MENU_IDX[@]}" -eq 0 ] && error " $(text 110) "
+  [ "${#MENU_IDX[@]}" -eq 0 ] && error " $(text 107) "
 
   # 显示动态菜单
   hint "\n $(text 127)\n"
-  for _i in "${!MENU_IDX[@]}"; do
-    local _val="${MENU_VAL[_i]}"
-    local _raw
-    eval "_raw=\"\${${L}[${MENU_IDX[_i]}]}\""
-    eval "hint \" $(printf '%2d' $(( _i+1 ))). ${_raw}\""
+  for MENU_INDEX in "${!MENU_IDX[@]}"; do
+    local VAL_ITEM="${MENU_VAL[MENU_INDEX]}"
+    local RAW_ITEM
+    eval "RAW_ITEM=\"\${${L}[${MENU_IDX[MENU_INDEX]}]}\""
+    eval "hint \" $(printf '%2d' $(( MENU_INDEX+1 ))). ${RAW_ITEM}\""
   done
   hint ""
   reading " $(text 24) " CHOOSE_NODE_INFO
@@ -864,9 +886,9 @@ change_config() {
         [ "$iface" != "lo" ] && IFACE_LIST+=("$iface")
       done < <(ifconfig -a 2>/dev/null | awk '/^[a-zA-Z]/')
     else
-      for _if in /sys/class/net/*; do
-        _if="${_if##*/}"
-        [ "$_if" != "lo" ] && IFACE_LIST+=("$_if")
+      for IFACE_ITEM in /sys/class/net/*; do
+        IFACE_ITEM="${IFACE_ITEM##*/}"
+        [ "$IFACE_ITEM" != "lo" ] && IFACE_LIST+=("$IFACE_ITEM")
       done
     fi
     mapfile -t IFACE_LIST < <(printf '%s\n' "${IFACE_LIST[@]}" | sort -u)
@@ -874,8 +896,8 @@ change_config() {
 
     hint "\n $(text 77) \n"
     hint " $(text 78) "
-    for _if in "${IFACE_LIST[@]}"; do
-      hint " $IDX. $_if"
+    for IFACE_ITEM in "${IFACE_LIST[@]}"; do
+      hint " $IDX. $IFACE_ITEM"
       ((IDX++))
     done
     hint " 0. $(text 35)"
@@ -1181,8 +1203,8 @@ create_argo_tunnel() {
 input_nginx_port() {
   local NUM=$1
   local PORT_ERROR_TIME=6
-  # 生成 1000 - 65535 随机默认端口数
-  local PORT_NGINX_DEFAULT=$(shuf -i ${MIN_PORT}-${MAX_PORT} -n 1)
+  # 在脚本端口范围（MIN_PORT-MAX_PORT）内随机生成一个未被系统占用的默认端口（与 clash_api 共用 find_free_port）
+  local PORT_NGINX_DEFAULT=$(find_free_port)
   [[ "$IS_FAST_INSTALL" = 'is_fast_install' && -z "$PORT_NGINX" ]] && PORT_NGINX="$PORT_NGINX_DEFAULT"
   while true; do
     [[ "$PORT_ERROR_TIME" > 1 && "$PORT_ERROR_TIME" < 6 ]] && unset IN_USED PORT_NGINX
@@ -1590,12 +1612,12 @@ custom_route_add() {
 
 # 将逗号分隔输入转为数组：支持半角/全角逗号、顿号、分号、竖线；不使用 IFS
 custom_route_csv_to_array() {
-  local _input="$1"
-  local -n _out_array="$2"
-  _out_array=()
+  local INPUT_CSV="$1"
+  local -n OUT_ARRAY="$2"
+  OUT_ARRAY=()
 
-  mapfile -t _out_array < <(
-    printf '%s\n' "$_input" |
+  mapfile -t OUT_ARRAY < <(
+    printf '%s\n' "$INPUT_CSV" |
       sed 's/\x1b\[[0-9;?]*[A-Za-z]//g; s/\^\[\[[0-9;?]*[A-Za-z]//g; s/[，、；;|]/,/g; s/[[:space:]]//g; s/,/\n/g; /^$/d'
   )
 }
@@ -2127,13 +2149,9 @@ cmd_systemctl() {
         rc-service "$2" restart >/dev/null 2>&1
         ;;
       reload )
+        rc-service "$2" reload >/dev/null 2>&1 || rc-service "$2" restart >/dev/null 2>&1
         local MAINPID=$(cat /var/run/sing-box.pid 2>/dev/null)
-        if [ -n "$MAINPID" ] && kill -0 "$MAINPID" 2>/dev/null; then
-          kill -HUP "$MAINPID" 2>/dev/null
-          info "\n $(text 95) \n"
-        else
-          rc-service "$2" restart >/dev/null 2>&1
-        fi
+        [ -n "$MAINPID" ] && info "\n $(text 95) \n"
         ;;
       status )
         rc-service "$2" status
@@ -2158,13 +2176,9 @@ cmd_systemctl() {
         [ "$IS_CENTOS" = 'CentOS7' ] && [ "$2" = 'sing-box' ] && [ -s $WORK_DIR/nginx.conf ] && nginx_run
         ;;
       reload )
+        systemctl reload sing-box >/dev/null 2>&1 || systemctl restart sing-box >/dev/null 2>&1
         local MAINPID=$(systemctl show -p MainPID sing-box 2>/dev/null | awk -F= '{print $2}')
-        if [ -n "$MAINPID" ] && [ "$MAINPID" -gt 0 ] 2>/dev/null; then
-          systemctl kill -s HUP sing-box >/dev/null 2>&1
-          info "\n $(text 95) \n"
-        else
-          systemctl restart sing-box >/dev/null 2>&1
-        fi
+        [ -n "$MAINPID" ] && [ "$MAINPID" -gt 0 ] 2>/dev/null && info "\n $(text 95) \n"
         ;;
       status )
         systemctl is-active "$2"
@@ -2474,10 +2488,10 @@ input_start_port() {
 sing-box_variables() {
   STEP_NUM=0
   # 预先用全选协议计算最大总步骤数，用于协议选择提示时显示 (1/?)
-  local _saved_protocols=("${INSTALL_PROTOCOLS[@]}")
+  local SAVED_PROTOCOLS=("${INSTALL_PROTOCOLS[@]}")
   INSTALL_PROTOCOLS=(b c d e f g h i j k l m)
   calc_install_steps
-  INSTALL_PROTOCOLS=("${_saved_protocols[@]}")
+  INSTALL_PROTOCOLS=("${SAVED_PROTOCOLS[@]}")
 
   if grep -qi 'cloudflare' <<< "$ASNORG4$ASNORG6"; then
     if grep -qi 'cloudflare' <<< "$ASNORG6" && [ -n "$WAN4" ] && ! grep -qi 'cloudflare' <<< "$ASNORG4"; then
@@ -2640,23 +2654,7 @@ sing-box_variables() {
   input_uuid
 
   # 输入节点名，以系统的 hostname 作为默认
-  local EMOJI="${EMOJI4:-$EMOJI6}"
-  local EMOJI="${EMOJI}${EMOJI:+ }"
-  if [ -z "$NODE_NAME_CONFIRM" ]; then
-    if command -v hostname >/dev/null 2>&1; then
-      local NODE_NAME_DEFAULT="${EMOJI}$(hostname)"
-    elif [ -s /etc/hostname ]; then
-      local NODE_NAME_DEFAULT="${EMOJI}$(cat /etc/hostname)"
-    else
-      local NODE_NAME_DEFAULT="${EMOJI}Sing-Box"
-    fi
-    [[ "$IS_FAST_INSTALL" = 'is_fast_install' || "$NONINTERACTIVE_INSTALL" = 'noninteractive_install' ]] && NODE_NAME_CONFIRM="${NODE_NAME_DEFAULT}"
-    if [ -z "$NODE_NAME_CONFIRM" ]; then
-      (( STEP_NUM++ )) || true
-      reading "\n (${STEP_NUM}/${TOTAL_STEPS}) $(text 13) " NODE_NAME
-    fi
-    grep -q '^$' <<< "$NODE_NAME" && NODE_NAME_CONFIRM="$NODE_NAME_DEFAULT" || NODE_NAME_CONFIRM="${EMOJI}${NODE_NAME}"
-  fi
+  input_node_name
 }
 
 check_dependencies() {
@@ -2943,49 +2941,6 @@ append_unique_port() {
   ARRAY_REF+=("$PORT")
 }
 
-# 收集当前应该对外开放的普通端口
-collect_exposed_ports() {
-  EXPOSED_TCP_PORTS=()
-  EXPOSED_UDP_PORTS=()
-
-  local FILE BASENAME PORT NGINX_PORT HAS_NGINX=false
-
-  if [ -s "${WORK_DIR}/nginx.conf" ]; then
-    HAS_NGINX=true
-    NGINX_PORT=$(awk '
-      /listen[[:space:]]+[0-9]+[[:space:]]*;/ && $2 !~ /^\[/ {
-        gsub(/;/, "", $2)
-        print $2
-        exit
-      }
-    ' "${WORK_DIR}/nginx.conf")
-    append_unique_port EXPOSED_TCP_PORTS "$NGINX_PORT"
-  fi
-
-  for FILE in ${WORK_DIR}/conf/*_inbounds.json; do
-    [ ! -s "$FILE" ] && continue
-    BASENAME=$(basename "$FILE")
-    PORT=$(awk -F '[:,]' '/"listen_port"/{gsub(/[[:space:]]/, "", $2); print $2; exit}' "$FILE")
-    [ -z "$PORT" ] && continue
-
-    case "$BASENAME" in
-      *hysteria2_inbounds.json|*tuic_inbounds.json )
-        append_unique_port EXPOSED_UDP_PORTS "$PORT"
-        ;;
-      *naive_inbounds.json )
-        append_unique_port EXPOSED_TCP_PORTS "$PORT"
-        append_unique_port EXPOSED_UDP_PORTS "$PORT"
-        ;;
-      *vmess-ws_inbounds.json|*vless-ws-tls_inbounds.json )
-        [ "$HAS_NGINX" = false ] && append_unique_port EXPOSED_TCP_PORTS "$PORT"
-        ;;
-      * )
-        append_unique_port EXPOSED_TCP_PORTS "$PORT"
-        ;;
-    esac
-  done
-}
-
 # UFW 普通端口规则备注
 service_port_ufw_comment() {
   local PROTO=$1
@@ -3002,26 +2957,6 @@ add_service_port_rule_ufw() {
 
   [ -z "$PROTO" ] || [ -z "$PORT" ] && return 1
   ufw allow ${PORT}/${PROTO} comment "$COMMENT" >/dev/null 2>&1
-}
-
-# 删除 UFW 普通端口规则
-del_service_port_rule_ufw() {
-  local PROTO=$1
-  local PORT=$2
-  local COMMENT_PREFIX='Sing-box Family Bucket UFW PORT'
-  local RULE_NUM
-
-  [ -z "$PROTO" ] || [ -z "$PORT" ] && return 0
-
-  ufw --force delete allow ${PORT}/${PROTO} >/dev/null 2>&1 || true
-
-  while read -r RULE_NUM; do
-    [ -n "$RULE_NUM" ] && ufw --force delete "$RULE_NUM" >/dev/null 2>&1 || true
-  done < <(
-    ufw status numbered 2>/dev/null | \
-    grep "$COMMENT_PREFIX ${PROTO} ${PORT}" | \
-    awk -F'[][]' '{print $2}' | sort -rn
-  )
 }
 
 # 清理所有由脚本管理的 UFW 普通端口规则
@@ -3495,6 +3430,76 @@ http {
   echo "$NGINX_CONF" > ${WORK_DIR}/nginx.conf
 }
 
+# ==================== 流量统计 ====================
+# 流量与单位换算：四舍五入保留 1 位小数
+format_traffic() {
+  local BYTES=$1
+  [ "$BYTES" -lt 1024 ] && { echo "${BYTES} B"; return; }
+  local DIV UNIT
+  if [ "$BYTES" -lt $((1024 * 1024)) ]; then
+    DIV=1024; UNIT=KB
+  elif [ "$BYTES" -lt $((1024 * 1024 * 1024)) ]; then
+    DIV=$((1024 * 1024)); UNIT=MB
+  elif [ "$BYTES" -lt $((1024 * 1024 * 1024 * 1024)) ]; then
+    DIV=$((1024 * 1024 * 1024)); UNIT=GB
+  else
+    DIV=$((1024 * 1024 * 1024 * 1024)); UNIT=TB
+  fi
+  local IDX=$((BYTES / DIV))
+  local REM=$(( ((BYTES % DIV) * 10 + DIV / 2) / DIV ))
+  [ "$REM" -ge 10 ] && { IDX=$((IDX + 1)); REM=0; }
+  echo "${IDX}.${REM} ${UNIT}"
+}
+
+# 在脚本限制的端口范围内（MIN_PORT-MAX_PORT）随机找一个未被系统占用的端口。
+# 逻辑统一为数组承载候选端口：一次性随机生成 16 个端口装入数组，
+# 逐个用 ss -nltp 探测占用情况，返回第一个空闲端口；全部占用则返回 1。
+# 用两次 RANDOM 组合成 0-65535 的随机值再取模，避免单次 RANDOM(0-32767) 无法覆盖完整范围。
+# 供 nginx 默认端口（input_nginx_port）与 clash_api 端口（find_free_api_port）共用。
+find_free_port() {
+  local CAND=() SPAN=$((MAX_PORT - MIN_PORT + 1)) IDX PORT
+  for IDX in $(seq 1 16); do
+    CAND+=("$((MIN_PORT + ((RANDOM * 2) + (RANDOM % 2)) % SPAN))")
+  done
+  for PORT in "${CAND[@]}"; do
+    if ! ss -nltp 2>/dev/null | grep -q ":${PORT} "; then
+      echo "$PORT"; return 0
+    fi
+  done
+  return 1
+}
+
+# 在脚本限制的端口范围内随机找一个未被占用的空闲端口，供 clash_api 监听（复用 find_free_port）。
+find_free_api_port() {
+  local PORT
+  PORT=$(find_free_port) || PORT=10000   # 探测失败则回退默认值
+  echo "$PORT"
+}
+
+# 获取 /connections 流量数据并缓存到全局变量 STATS_JSON（静默降级：任一前置不满足即返回 1）
+# clash_api 由官方二进制默认编译（with_clash_api），无需版本门控；
+# /connections 返回 { downloadTotal, uploadTotal, connections: [...] }，
+# downloadTotal / uploadTotal 为进程生命周期累计值
+ensure_stats_data() {
+  [ -n "$STATS_JSON" ] && return 0
+  [ "${STATUS[0]}" != "$(text 28)" ] && return 1   # Sing-box 未运行
+  [ ! -x "$WORK_DIR/sing-box" ] && return 1
+
+  local API_PORT
+  # 从 04_experimental.json 解析 clash_api 监听端口（external_controller 形如 127.0.0.1:<port>）。
+  # 单条 sed 正则提取（排除 // 注释行），不依赖 jq / 多段管道。
+  API_PORT=$(sed -n '/^[[:space:]]*\/\//!s/.*"external_controller"[[:space:]]*:[[:space:]]*"127\.0\.0\.1:\([0-9][0-9]*\)".*/\1/p' "$WORK_DIR/conf/04_experimental.json" 2>/dev/null | head -1)
+  [ -z "$API_PORT" ] && return 1
+
+  # curl 优先，wget 兜底（脚本安装时已依赖 wget，必存在）
+  if command -v curl >/dev/null 2>&1; then
+    STATS_JSON=$(curl -fsS --max-time 3 "http://127.0.0.1:${API_PORT}/connections" 2>/dev/null) || return 1
+  else
+    STATS_JSON=$(wget -qO- --timeout=3 "http://127.0.0.1:${API_PORT}/connections" 2>/dev/null) || return 1
+  fi
+  [ -n "$STATS_JSON" ] || return 1
+}
+
 # 生成 sing-box 基础配置
 generate_sing_box_base_conf() {
   # 生成 log 配置
@@ -3601,13 +3606,21 @@ EOF
 }
 EOF
 
-  # 生成缓存文件
+  # 生成缓存文件 + clash_api 流量统计。clash_api 是官方二进制默认编译功能
+  # （with_clash_api 在 DEFAULT_BUILD_TAGS 中），无版本门控；无需枚举
+  # inbound/outbound tag（clash_api 默认统计所有流量）。
+  # 新装场景（generate_sing_box_base_conf 由 sing-box_json 首次调用）inbound 尚未生成
+  # 也不影响 clash_api 注入，此处统一直接写入。
+  CLASH_API_PORT=$(find_free_api_port)
   cat > ${WORK_DIR}/conf/04_experimental.json << EOF
 {
     "experimental": {
         "cache_file": {
             "enabled": true,
             "path": "${WORK_DIR}/cache.db"
+        },
+        "clash_api": {
+            "external_controller": "127.0.0.1:${CLASH_API_PORT}"
         }
     }
 }
@@ -4425,7 +4438,7 @@ fetch_nodes_value() {
 
   # 获取公共数据
   ls ${WORK_DIR}/conf/*-ws*inbounds.json >/dev/null 2>&1 && SERVER_IP=$(awk -F '"' '/"WS_SERVER_IP_SHOW"/{print $4; exit}' ${WORK_DIR}/conf/*-ws*inbounds.json) || SERVER_IP=$(grep -A1 '"tag"' ${WORK_DIR}/list | sed -E '/-ws(-tls)*",$/{N;d}' | awk -F '"' '/"server"/{count++; if (count == 1) {print $4; exit}}')
-  EXISTED_PORTS=$(awk -F ':|,' '/listen_port/{print $2}' ${WORK_DIR}/conf/*_inbounds.json)
+  EXISTED_PORTS=$(awk -F ':|,' '/listen_port/{print $2}' ${WORK_DIR}/conf/*_inbounds.json 2>/dev/null)
   START_PORT=$(awk 'NR == 1 { min = $0 } { if ($0 < min) min = $0; count++ } END {print min}' <<< "$EXISTED_PORTS")
   [[ -z "$NODE_NAME_CONFIRM" && -s ${WORK_DIR}/subscribe/clash ]] && NODE_NAME_CONFIRM=$(awk -F "'" '/u: &u/{print $2; exit}' ${WORK_DIR}/subscribe/clash)
 
@@ -4495,6 +4508,25 @@ fetch_nodes_value() {
 
   # 获取 naive key-value
   [ -s ${WORK_DIR}/conf/*_${NODE_TAG[11]}_inbounds.json ] && local JSON=$(cat ${WORK_DIR}/conf/*_${NODE_TAG[11]}_inbounds.json) && NODE_NAME[22]=$(sed -n "s/.*\"tag\":\"\(.*\) ${NODE_TAG[11]}.*/\1/p" <<< "$JSON") && PORT_NAIVE=$(sed -n 's/.*"listen_port":\([0-9]\+\),/\1/gp' <<< "$JSON") && UUID[22]=$(awk -F '"' '/"username"/{print $4; exit}' <<< "$JSON")
+
+  # 兜底：极早期版本 04_experimental.json 无 clash_api（cache_file-only），补全注入。
+  # 同时剥离可能残留的 v2ray_api（官方 release 二进制默认不编译该功能，
+  # 若旧版脚本已注入会在启动时报 "v2ray api is not included in this build"）。
+  # 升级/change 场景 generate_sing_box_base_conf 已统一写入 clash_api，这里无需重复。
+  if ! grep -q 'clash_api' ${WORK_DIR}/conf/04_experimental.json 2>/dev/null; then
+    CLASH_API_PORT=$(find_free_api_port)
+    local EXP_JSON=$(cat ${WORK_DIR}/conf/04_experimental.json)
+    printf '%s\n' "$EXP_JSON" | "$DIR/jq" 'del(.experimental.v2ray_api) | .experimental += {
+      "clash_api": {
+        "external_controller": "127.0.0.1:'"$CLASH_API_PORT"'"
+      }
+    }' > ${WORK_DIR}/conf/04_experimental.json
+    # 补全后立即热加载（SIGHUP）使 clash_api 监听马上生效；
+    # 前台同步执行确保信号送达（SIGHUP reload 不断连 SSH）；仅当 sing-box 运行中才 reload
+    if pgrep -x sing-box >/dev/null 2>&1; then
+      cmd_systemctl reload sing-box
+    fi
+  fi
 }
 
 # 获取 Argo 临时隧道域名
@@ -5326,6 +5358,29 @@ $(hint "$(text 82) 2:")
 $(${WORK_DIR}/qrencode $SUBSCRIBE_ADDRESS/${UUID_CONFIRM}/auto2)
 "
 
+  # === 流量统计块（仅 clash_api 可用时显示；流量为 0 时显示 0 B） ===
+  # downloadTotal / uploadTotal 为 clash_api 提供的进程生命周期累计值
+  STATS_JSON=''   # 每次调用 export_list 都是独立的用户请求，强制刷新获取实时数据
+  if ensure_stats_data; then
+    local IN_SUM OUT_SUM
+    IN_SUM=$(echo "$STATS_JSON" | $WORK_DIR/jq '.downloadTotal // 0' 2>/dev/null)
+    OUT_SUM=$(echo "$STATS_JSON" | $WORK_DIR/jq '.uploadTotal // 0' 2>/dev/null)
+    EXPORT_LIST_FILE="${EXPORT_LIST_FILE}
+
+*******************************************
+┌────────────────┐
+│                │
+│  $(warning "Traffic Stats") │
+│                │
+└────────────────┘
+---------------------------
+
+$(info "⬇ Inbound  (total):  $(format_traffic $IN_SUM)")
+$(hint "⬆ Outbound (total):  $(format_traffic $OUT_SUM)")
+"
+  fi
+  # === 结束 ===
+
   # 生成并显示节点信息
   echo "$EXPORT_LIST_FILE" > ${WORK_DIR}/list
   cat ${WORK_DIR}/list
@@ -5360,27 +5415,30 @@ change_protocols() {
   check_system_ip
 
   # 查找已安装的协议，并遍历其在所有协议列表中的名称，获取协议名后存放在 EXISTED_PROTOCOLS; 没有的协议存放在 NOT_EXISTED_PROTOCOLS
-  INSTALLED_PROTOCOLS_LIST=$(awk -F '"' '/"tag":/{print $4}' ${WORK_DIR}/conf/*_inbounds.json | grep -v 'shadowtls-in' | awk '{print $NF}')
+  INSTALLED_PROTOCOLS_LIST=$(awk -F '"' '/"tag":/{print $4}' ${WORK_DIR}/conf/*_inbounds.json 2>/dev/null | grep -v 'shadowtls-in' | awk '{print $NF}')
   for f in ${!NODE_TAG[@]}; do [[ $INSTALLED_PROTOCOLS_LIST =~ "${NODE_TAG[f]}" ]] && EXISTED_PROTOCOLS+=("${PROTOCOL_LIST[f]}") || NOT_EXISTED_PROTOCOLS+=("${PROTOCOL_LIST[f]}"); done
 
-  # 列出已安装协议
-  hint "\n $(text 136) (${#EXISTED_PROTOCOLS[@]})"
-  for h in "${!EXISTED_PROTOCOLS[@]}"; do
-    hint " $(asc $(( h+97 ))). ${EXISTED_PROTOCOLS[h]} "
-  done
+  # 已安装协议为空时不交互删除，直接进入添加
+  if [ "${#EXISTED_PROTOCOLS[@]}" -gt 0 ]; then
+    # 列出已安装协议（保持原有样式，仅显示协议名；F2 流量显示已移除，见需求文档 3.3 节）
+    hint "\n $(text 136) (${#EXISTED_PROTOCOLS[@]})"
+    for h in "${!EXISTED_PROTOCOLS[@]}"; do
+      hint " $(asc $(( h+97 ))). ${EXISTED_PROTOCOLS[h]} "
+    done
 
-  # 从已安装的协议中选择需要删除的协议名，并存放在 REMOVE_PROTOCOLS，把保存的协议的协议存放在 KEEP_PROTOCOLS
-  reading "\n $(text 64) " REMOVE_SELECT
-  # 统一为小写，去掉重复选项，处理不在可选列表里的选项，把特殊符号处理
-  REMOVE_SELECT=$(sed "s/[^a-$(asc $(( ${#EXISTED_PROTOCOLS[@]} + 96 )))]//g" <<< "${REMOVE_SELECT,,}" | awk 'BEGIN{RS=""; FS=""}{delete seen; output=""; for(i=1; i<=NF; i++){ if(!seen[$i]++){ output=output $i } } print output}')
+    # 从已安装的协议中选择需要删除的协议名，并存放在 REMOVE_PROTOCOLS，把保存的协议的协议存放在 KEEP_PROTOCOLS
+    reading "\n $(text 64) " REMOVE_SELECT
+    # 统一为小写，去掉重复选项，处理不在可选列表里的选项，把特殊符号处理
+    REMOVE_SELECT=$(sed "s/[^a-$(asc $(( ${#EXISTED_PROTOCOLS[@]} + 96 )))]//g" <<< "${REMOVE_SELECT,,}" | awk 'BEGIN{RS=""; FS=""}{delete seen; output=""; for(i=1; i<=NF; i++){ if(!seen[$i]++){ output=output $i } } print output}')
 
-  for ((j=0; j<${#REMOVE_SELECT}; j++)); do
-    REMOVE_PROTOCOLS+=("${EXISTED_PROTOCOLS[$(( $(asc "$(awk "NR==$[j+1] {print}" <<< "$(grep -o . <<< "$REMOVE_SELECT")")") - 97 ))]}")
-  done
+    for ((j=0; j<${#REMOVE_SELECT}; j++)); do
+      REMOVE_PROTOCOLS+=("${EXISTED_PROTOCOLS[$(( $(asc "$(awk "NR==$[j+1] {print}" <<< "$(grep -o . <<< "$REMOVE_SELECT")")") - 97 ))]}")
+    done
 
-  for k in "${EXISTED_PROTOCOLS[@]}"; do
-    [[ ! "${REMOVE_PROTOCOLS[@]}" =~ "$k" ]] && KEEP_PROTOCOLS+=("$k")
-  done
+    for k in "${EXISTED_PROTOCOLS[@]}"; do
+      [[ ! "${REMOVE_PROTOCOLS[@]}" =~ "$k" ]] && KEEP_PROTOCOLS+=("$k")
+    done
+  fi
 
   # 如有未安装的协议，列表显示并选择安装，把增加的协议存在放在 ADD_PROTOCOLS
   if [ "${#NOT_EXISTED_PROTOCOLS[@]}" -gt 0 ]; then
@@ -5397,9 +5455,8 @@ change_protocols() {
     done
   fi
 
-  # 重新安装 = 保留 + 新增，如数量为 0 ，则触发卸载
+  # 重新安装 = 保留 + 新增；数量可为 0（协议全删后仅保留基础配置）
   REINSTALL_PROTOCOLS=("${KEEP_PROTOCOLS[@]}" "${ADD_PROTOCOLS[@]}")
-  [ "${#REINSTALL_PROTOCOLS[@]}" = 0 ] && error "\n $(text 73) "
 
   # 显示重新安装的协议列表，并确认是否正确
   hint "\n $(text 138) (${#REINSTALL_PROTOCOLS[@]}) "
@@ -5431,6 +5488,13 @@ change_protocols() {
   for v in "${NODE_NAME[@]}"; do
     [ -n "$v" ] && NODE_NAME_CONFIRM="$v" && break
   done
+
+  # 无既有协议（0 协议或全部删除后重新添加）时，像新安装一样询问节点名称；已有节点名称则沿用
+  if [ "${#REINSTALL_PROTOCOLS[@]}" -gt 0 ] && [ "${#KEEP_PROTOCOLS[@]}" -eq 0 ]; then
+    unset NODE_NAME_CONFIRM
+    input_node_name
+  fi
+
   [ "${#WS_SERVER_IP[@]}" -gt 0 ] && WS_SERVER_IP_SHOW=$(awk '{print $1}' <<< "${WS_SERVER_IP[@]}") && CDN=$(awk '{print $1}' <<< "${CDN[@]}")
 
   # 寻找待删除协议的 inbound 文件名
@@ -5693,13 +5757,22 @@ change_protocols() {
       cmd_systemctl enable argo >/dev/null 2>&1
     fi
   elif [ -s ${ARGO_DAEMON_FILE} ]; then
-    cmd_systemctl disable argo >/dev/null 2>&1
-    rm -f ${ARGO_DAEMON_FILE}
-    [ -s ${WORK_DIR}/tunnel.json ] && rm -f ${WORK_DIR}/tunnel.*
+    # 无 ws 协议：固定隧道（token/json）保留 argo；临时隧道删除
+    if [[ "$ARGO_TYPE" != 'is_token_argo' && "$ARGO_TYPE" != 'is_json_argo' ]]; then
+      cmd_systemctl disable argo >/dev/null 2>&1
+      rm -f ${ARGO_DAEMON_FILE}
+      [ -s ${WORK_DIR}/tunnel.json ] && rm -f ${WORK_DIR}/tunnel.*
+    fi
   fi
 
-  # 如有需要，删除 nginx 配置文件
-  ! ls ${ARGO_DAEMON_FILE} >/dev/null 2>&1 && [[ -s ${WORK_DIR}/nginx.conf && "$IS_SUB" = 'no_sub' ]] && IS_ARGO=no_argo && rm -f ${WORK_DIR}/nginx.conf
+  # 无 ws 协议且无订阅时删除 nginx 配置并停止进程；有订阅保留（订阅服务需要 nginx）
+  if ! ls ${WORK_DIR}/conf/*-ws*inbounds.json >/dev/null 2>&1 && [[ -s ${WORK_DIR}/nginx.conf && "$IS_SUB" = 'no_sub' ]]; then
+    nginx_stop
+    [ "$SYSTEM" != 'Alpine' ] && [ "$IS_CENTOS" != 'CentOS7' ] && \
+      sed -i '/ExecStartPre=.*nginx/d' ${SINGBOX_DAEMON_FILE} && systemctl daemon-reload
+    rm -f ${WORK_DIR}/nginx.conf
+    unset PORT_NGINX
+  fi
 
   # 热更 sing-box（SIGHUP 重新加载配置，PID 不变）
   cmd_systemctl reload sing-box
@@ -6171,10 +6244,22 @@ menu() {
       printf '%-11s' "$s"
     fi
   }
-  local _SBV; printf -v _SBV '%-26s' "$SING_BOX_VERSION"
-  local _AV;  printf -v _AV  '%-26s' "$ARGO_VERSION"
-  local _NV;  printf -v _NV  '%-26s' "$NGINX_VERSION"
-  info "\t Sing-box: $(_sv "${STATUS[0]}")  ${_SBV}${SING_BOX_MEMORY_USAGE}\n\t Argo:     $(_sv "${STATUS[1]}")  ${_AV}${ARGO_MEMORY_USAGE}\n\t Nginx:    $(_sv "${STATUS[2]}")  ${_NV}${NGINX_MEMORY_USAGE}"
+  local SBV; printf -v SBV '%-26s' "$SING_BOX_VERSION"
+  local AV;  printf -v AV  '%-26s' "$ARGO_VERSION"
+  local NV;  printf -v NV  '%-26s' "$NGINX_VERSION"
+  # === 计算 Sing-box 行流量（仅数据可用时显示；流量为 0 时显示 0 B） ===
+  # downloadTotal / uploadTotal 为 clash_api 提供的进程生命周期累计值
+  local SB_TRAFFIC=""
+  if ensure_stats_data 2>/dev/null; then
+    local IN_SUM OUT_SUM
+    IN_SUM=$(echo "$STATS_JSON" | $WORK_DIR/jq '.downloadTotal // 0' 2>/dev/null)
+    OUT_SUM=$(echo "$STATS_JSON" | $WORK_DIR/jq '.uploadTotal // 0' 2>/dev/null)
+    SB_TRAFFIC="  ⬇$(format_traffic $IN_SUM) ⬆$(format_traffic $OUT_SUM)"
+  fi
+  # === 结束 ===
+  info "\t Sing-box: $(_sv "${STATUS[0]}")  ${SBV}${SING_BOX_MEMORY_USAGE}${SB_TRAFFIC}"
+  info "\t Argo:     $(_sv "${STATUS[1]}")  ${AV}${ARGO_MEMORY_USAGE}"
+  info "\t Nginx:    $(_sv "${STATUS[2]}")  ${NV}${NGINX_MEMORY_USAGE}"
   echo -e "\n======================================================================================================================\n"
   for ((b=1;b<=${#OPTION[*]};b++)); do [ "$b" = "${#OPTION[*]}" ] && hint " ${OPTION[0]} " || hint " ${OPTION[b]} "; done
   reading "\n $(text 24) " CHOOSE
@@ -6190,6 +6275,51 @@ menu() {
 check_cdn
 statistics_of_run_times update sing-box.sh 2>/dev/null
 
+###### 为了给旧版本 04_experimental.json 补全 clash_api 配置并剥离 v2ray_api，将于 2026年12月31日移除
+if [ -x "$WORK_DIR/jq" ] && [ -s "$WORK_DIR/conf/04_experimental.json" ] && [ -x "$WORK_DIR/sing-box" ] && [[ "$(date +%Y%m%d)" < "20261231" ]]; then
+  # 旧版本 04_experimental.json 可能缺 clash_api、或含 v2ray_api（旧版脚本注入的）。
+  # clash_api 是官方 release 二进制默认编译功能（with_clash_api），直接补全；
+  # v2ray_api 官方 release 二进制默认不编译，残留会导致启动失败，必须剥离。
+  if ! grep -q 'clash_api' "$WORK_DIR/conf/04_experimental.json" || grep -q 'v2ray_api' "$WORK_DIR/conf/04_experimental.json"; then
+    API_PORT=$(find_free_api_port)
+    if grep -q 'clash_api' "$WORK_DIR/conf/04_experimental.json"; then
+      # 已有 clash_api（可能由新版脚本生成），仅剥离残留的 v2ray_api
+      grep -v '^//' "$WORK_DIR/conf/04_experimental.json" | $WORK_DIR/jq 'del(.experimental.v2ray_api)' > "$TEMP_DIR/exp_clash_api_tmp.json" 2>/dev/null
+    else
+      # 缺失 clash_api，剥离 v2ray_api 并补全 clash_api
+      grep -v '^//' "$WORK_DIR/conf/04_experimental.json" | $WORK_DIR/jq --arg ec "127.0.0.1:${API_PORT}" '
+        del(.experimental.v2ray_api) | .experimental += {
+          "clash_api": { "external_controller": $ec }
+        }
+      ' > "$TEMP_DIR/exp_clash_api_tmp.json" 2>/dev/null
+    fi
+    [ -s "$TEMP_DIR/exp_clash_api_tmp.json" ] && mv "$TEMP_DIR/exp_clash_api_tmp.json" "$WORK_DIR/conf/04_experimental.json" && {
+      # 修改了 experimental 配置，用 SIGHUP 热加载使 API 监听生效（PID 不变，SSH 连接不断）。
+      # 此处在 check_system_info() 之前（SYSTEM 未设置）且 select_language() 之前（L 未设置），
+      # 注意：不能调用 cmd_systemctl reload——其成功分支会调用 info/text（nameref 依赖 L），
+      # 与 Alpine 分支直接 kill -HUP 对称。前台同步执行确保信号送达（SIGHUP 不断连 SSH）。
+      if [ -d /run/openrc ] || command -v rc-service >/dev/null 2>&1; then
+        # Alpine：kill -HUP 主进程（与 cmd_systemctl reload 的 Alpine 分支一致）；PID 不存在时降级 restart。
+        SB_PID=$(cat /var/run/sing-box.pid 2>/dev/null)
+        if [ -n "$SB_PID" ] && kill -0 "$SB_PID" 2>/dev/null; then
+          kill -HUP "$SB_PID" 2>/dev/null
+        else
+          rc-service sing-box restart >/dev/null 2>&1
+        fi
+      else
+        # systemd 等：复刻 cmd_systemctl reload 的 systemd 分支（SIGHUP 热加载）；PID 不存在时降级 restart。
+        SB_MAINPID=$(systemctl show -p MainPID sing-box 2>/dev/null | awk -F= '{print $2}')
+        if [ -n "$SB_MAINPID" ] && [ "$SB_MAINPID" -gt 0 ] 2>/dev/null; then
+          systemctl kill -s HUP sing-box >/dev/null 2>&1
+        else
+          systemctl restart sing-box >/dev/null 2>&1
+        fi
+        unset SB_MAINPID
+      fi
+    }
+  fi
+fi
+
 ###### 为了把原来的 nekobox 换成 Throne 做的处理，将于 2026年9月30日移除
 if [ -s $WORK_DIR/nginx.conf ] && grep -q 'Neko|Throne' $WORK_DIR/nginx.conf; then
   sed -i 's@~\*Neko|Throne.*@~*Throne|Neko              /throne;         # 匹配 Throne / Neko 客户端@g' "$WORK_DIR/nginx.conf"
@@ -6202,21 +6332,21 @@ fi
 [[ "${*^^}" =~ '-E'|'-K' ]] && L=E
 [[ "${*^^}" =~ '-C'|'-B'|'-L' ]] && L=C
 # 支持在 select_language 前识别 --LANGUAGE，避免 KV 无交互安装仍弹出语言选择。
-for ((_param_i=1; _param_i<=$#; _param_i++)); do
-  eval "_param_v=\${${_param_i}}"
-  case "${_param_v^^}" in
+for ((PARAM_I=1; PARAM_I<=$#; PARAM_I++)); do
+  eval "PARAM_V=\${${PARAM_I}}"
+  case "${PARAM_V^^}" in
     --LANGUAGE )
-      _param_n=$((_param_i+1))
-      eval "_param_lang=\${${_param_n}}"
-      [[ "${_param_lang^^}" =~ ^C ]] && L=C || L=E
+      PARAM_N=$((PARAM_I+1))
+      eval "PARAM_LANG=\${${PARAM_N}}"
+      [[ "${PARAM_LANG^^}" =~ ^C ]] && L=C || L=E
       ;;
     --LANGUAGE=* )
-      _param_lang="${_param_v#*=}"
-      [[ "${_param_lang^^}" =~ ^C ]] && L=C || L=E
+      PARAM_LANG="${PARAM_V#*=}"
+      [[ "${PARAM_LANG^^}" =~ ^C ]] && L=C || L=E
       ;;
   esac
 done
-unset _param_i _param_v _param_n _param_lang
+unset PARAM_I PARAM_V PARAM_N PARAM_LANG
 
 # 获取 -F 参数的值
 CONFIG_FILE=$(awk '-F[ =]' 'tolower($1) ~ /^-f$/{print $2}' <<< "$*")
