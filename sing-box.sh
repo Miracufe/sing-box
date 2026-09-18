@@ -3747,6 +3747,19 @@ ingress:
 EOF
 }
 
+# 判断指定证书文件是否为商业 CA 签发（Let's Encrypt / Google / ZeroSSL / DigiCert / Cloudflare 等）
+is_commercial_cert() {
+  local FILE="${1:-${WORK_DIR}/cert/cert.pem}"
+  [ ! -s "$FILE" ] && return 1
+  if grep -qiE "Let's Encrypt|ZeroSSL|Google Trust Services|DigiCert|Sectigo|Cloudflare" <(openssl x509 -in "$FILE" -noout -issuer 2>/dev/null); then
+    return 0
+  fi
+  if openssl verify -untrusted "$FILE" "$FILE" >/dev/null 2>&1 || openssl verify "$FILE" >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
 # 生成自签证书，区分使用 IPv4 / IPv6 / 域名
 # 默认同时更新 cert.pem(36500天) 和 cert_200.pem(200天)
 # 传参 naive_only 时，仅检测 cert_200.pem 是否缺失 / 过期 / SNI 不一致，符合条件才更新
@@ -3783,8 +3796,16 @@ EOF
 
   if [ "$CERT_MODE" != 'naive_only' ]; then
     openssl req -new -x509 -days 36500 -key ${WORK_DIR}/cert/private.key -out ${WORK_DIR}/cert/cert.pem -config ${WORK_DIR}/cert/cert.conf -extensions v3_req
-    openssl req -new -x509 -days 200 -key ${WORK_DIR}/cert/private.key -out ${WORK_DIR}/cert/cert_200.pem -config ${WORK_DIR}/cert/cert.conf -extensions v3_req
+    # 若 cert_200.pem 是有效商用证书，则不覆盖 cert_200.pem
+    if [ ! -s "$CERT_200_FILE" ] || ! is_commercial_cert "$CERT_200_FILE" || ! openssl x509 -checkend 0 -noout -in "$CERT_200_FILE" >/dev/null 2>&1; then
+      openssl req -new -x509 -days 200 -key ${WORK_DIR}/cert/private.key -out ${WORK_DIR}/cert/cert_200.pem -config ${WORK_DIR}/cert/cert.conf -extensions v3_req
+    fi
   else
+    # naive_only: 如果 cert_200.pem 已经是有效商用证书，严禁重新生成自签证书覆盖
+    if [ -s "$CERT_200_FILE" ] && is_commercial_cert "$CERT_200_FILE" && openssl x509 -checkend 0 -noout -in "$CERT_200_FILE" >/dev/null 2>&1; then
+      rm -f ${WORK_DIR}/cert/cert.conf
+      return 0
+    fi
     CERT_200_SNI=$(openssl x509 -noout -ext subjectAltName -in "$CERT_200_FILE" 2>/dev/null | awk -F 'DNS:' '/DNS:/{gsub(/,.*/, "", $2); print $2}')
     if [ ! -s "$CERT_200_FILE" ] || ! openssl x509 -checkend 0 -noout -in "$CERT_200_FILE" >/dev/null 2>&1 || [ "$CERT_200_SNI" != "$TLS_SERVER" ]; then
       openssl req -new -x509 -days 200 -key ${WORK_DIR}/cert/private.key -out ${WORK_DIR}/cert/cert_200.pem -config ${WORK_DIR}/cert/cert.conf -extensions v3_req
@@ -4775,6 +4796,9 @@ EOF
     [ -z "$PORT_NAIVE" ] && PORT_NAIVE=$[START_PORT+$(awk -v target=$CHECK_PROTOCOLS '{ for(i=1; i<=NF; i++) if($i == target) { print i-1; break } }' <<< "${INSTALL_PROTOCOLS[*]}")]
     NODE_NAME[22]=${NODE_NAME[22]:-"$NODE_NAME_CONFIRM"} && UUID[22]=${UUID[22]:-"$UUID_CONFIRM"}
 
+    local NAIVE_KEY_PATH="${WORK_DIR}/cert/private.key"
+    [ -s "${WORK_DIR}/cert/private_200.key" ] && NAIVE_KEY_PATH="${WORK_DIR}/cert/private_200.key"
+
     cat > ${WORK_DIR}/conf/22_${NODE_TAG[11]}_inbounds.json << EOF
 {
     "inbounds":[
@@ -4792,7 +4816,7 @@ EOF
             "tls":{
                 "enabled":true,
                 "certificate_path":"${WORK_DIR}/cert/cert_200.pem",
-                "key_path":"${WORK_DIR}/cert/private.key"
+                "key_path":"${NAIVE_KEY_PATH}"
             }
         }
     ]
@@ -5209,12 +5233,8 @@ export_list() {
   local CERT_URL_2=$(awk '{printf "%s\\r\\n", $0}' ${WORK_DIR}/cert/cert.pem)
 
   local IS_COMMERCIAL_CERT=false
-  if [ -s "${WORK_DIR}/cert/cert.pem" ]; then
-    if openssl verify -untrusted "${WORK_DIR}/cert/cert.pem" "${WORK_DIR}/cert/cert.pem" >/dev/null 2>&1 || openssl verify "${WORK_DIR}/cert/cert.pem" >/dev/null 2>&1; then
-      IS_COMMERCIAL_CERT=true
-    elif grep -qiE "Let's Encrypt|ZeroSSL|Google Trust Services|DigiCert" <(openssl x509 -in "${WORK_DIR}/cert/cert.pem" -noout -issuer 2>/dev/null); then
-      IS_COMMERCIAL_CERT=true
-    fi
+  if [ -s "${WORK_DIR}/cert/cert.pem" ] && is_commercial_cert "${WORK_DIR}/cert/cert.pem"; then
+    IS_COMMERCIAL_CERT=true
   fi
 
   local CLASH_FP=""
@@ -5236,16 +5256,40 @@ export_list() {
   # 从自签证书的 SAN 中读取当前使用的 SNI，优先取 SAN，退回到 CN
   local TLS_SERVER=$(openssl x509 -noout -ext subjectAltName -in ${WORK_DIR}/cert/cert.pem 2>/dev/null | awk -F 'DNS:' '/DNS:/{gsub(/,.*/, "", $2); print $2}')
 
-  # naive 协议的特殊处理
+  # naive 协议的特殊处理 (解耦商业 CA 证书与基础自签证书)
+  local IS_NAIVE_COMMERCIAL=false
+  local NAIVE_DOMAIN=""
+  local NAIVE_SERVER="${SERVER_IP}"
+  local NAIVE_SNI="${TLS_SERVER}"
   if [ -n "$PORT_NAIVE" ]; then
-    if [ "$IS_COMMERCIAL_CERT" = "true" ]; then
-      # 商用 CA 证书模式下：严禁生成自签名证书，确保 cert_200.pem 同步商用证书，且节点连接地址必须使用域名以防 Cronet DNS 劫持
+    # 优先检测 cert_200.pem 是否为有效商业证书
+    if [ -s "${WORK_DIR}/cert/cert_200.pem" ] && is_commercial_cert "${WORK_DIR}/cert/cert_200.pem"; then
+      IS_NAIVE_COMMERCIAL=true
+      NAIVE_DOMAIN=$(openssl x509 -noout -ext subjectAltName -in "${WORK_DIR}/cert/cert_200.pem" 2>/dev/null | awk -F 'DNS:' '/DNS:/{gsub(/,.*/, "", $2); print $2}')
+      [ -z "$NAIVE_DOMAIN" ] && NAIVE_DOMAIN=$(openssl x509 -noout -subject -in "${WORK_DIR}/cert/cert_200.pem" 2>/dev/null | awk -F 'CN *= *' '{print $2}' | awk '{print $1}')
+    elif [ -d "/etc/nginx/ssl" ]; then
+      for D in /etc/nginx/ssl/*; do
+        if [ -d "$D" ] && [ -s "$D/fullchain.cer" ] && is_commercial_cert "$D/fullchain.cer"; then
+          IS_NAIVE_COMMERCIAL=true
+          NAIVE_DOMAIN=$(basename "$D")
+          cp "$D/fullchain.cer" "${WORK_DIR}/cert/cert_200.pem" 2>/dev/null || true
+          [ -s "$D/${NAIVE_DOMAIN}.key" ] && cp "$D/${NAIVE_DOMAIN}.key" "${WORK_DIR}/cert/private_200.key" 2>/dev/null || true
+          break
+        fi
+      done
+    elif [ "$IS_COMMERCIAL_CERT" = "true" ]; then
+      IS_NAIVE_COMMERCIAL=true
+      NAIVE_DOMAIN="${TLS_SERVER}"
       cp "${WORK_DIR}/cert/cert.pem" "${WORK_DIR}/cert/cert_200.pem" 2>/dev/null || true
-      local NAIVE_SERVER="${TLS_SERVER}"
+    fi
+
+    if [ "$IS_NAIVE_COMMERCIAL" = "true" ]; then
+      NAIVE_SERVER="${NAIVE_DOMAIN}"
+      NAIVE_SNI="${NAIVE_DOMAIN}"
     else
-      # 自签证书模式下：在 -n 查看节点时，如 cert_200.pem 过期 / 缺失 / SNI 不一致则自动更新
       ssl_certificate "$TLS_SERVER" naive_only
-      local NAIVE_SERVER="${SERVER_IP}"
+      NAIVE_SERVER="${SERVER_IP}"
+      NAIVE_SNI="${TLS_SERVER}"
     fi
 
     # 读取 naive 证书并格式化为 JSON 字符串数组内容；多行/单行位置共用这一个变量
@@ -5259,7 +5303,7 @@ export_list() {
   local NAIVE_CERT_JSON=""
   local V2RAYN_CERT_200_JSON=""
   local THRONE_CERT_200=""
-  if [ "$IS_COMMERCIAL_CERT" = "false" ] && [ -n "$PORT_NAIVE" ]; then
+  if [ "$IS_NAIVE_COMMERCIAL" != "true" ] && [ -n "$PORT_NAIVE" ]; then
     SHADOWROCKET_HPKP_200="${SHADOWROCKET_HPKP_200}"
     NAIVE_CERT_JSON="\\\"certificate\\\": [$(tr -d '\n' <<< "$CERT200_JSON")], "
     V2RAYN_CERT_200_JSON=",\\\"Cert\\\":\\\"${CERT_200_URL_2}\\\""
@@ -5462,9 +5506,9 @@ vless://$(echo -n "auto:${UUID[20]}@${SERVER_IP_2}:${PORT_GRPC_REALITY}" | base6
 anytls://${UUID[21]}@${SERVER_IP_1}:${PORT_ANYTLS}?peer=${TLS_SERVER}&udp=1${SHADOWROCKET_HPKP}#${NODE_NAME[21]// /%20}%20${NODE_TAG[10]}
 "
   [ -n "$PORT_NAIVE" ] && local SHADOWROCKET_SUBSCRIBE+="
-http2://$(echo -n "${UUID[22]}:${UUID[22]}@${SERVER_IP_2}:${PORT_NAIVE}" | base64 -w0)?peer=${TLS_SERVER}&alpn=h2,http/1.1&padding=1&uot=2${SHADOWROCKET_HPKP_200}#${NODE_NAME[22]// /%20}%20${NODE_TAG[11]}%20http2
+http2://$(echo -n "${UUID[22]}:${UUID[22]}@${NAIVE_SERVER:-$SERVER_IP_2}:${PORT_NAIVE}" | base64 -w0)?peer=${NAIVE_SNI:-$TLS_SERVER}&alpn=h2,http/1.1&padding=1&uot=2${SHADOWROCKET_HPKP_200}#${NODE_NAME[22]// /%20}%20${NODE_TAG[11]}%20http2
 
-http3://$(echo -n "${UUID[22]}:${UUID[22]}@${SERVER_IP_2}:${PORT_NAIVE}" | base64 -w0)?peer=${TLS_SERVER}&alpn=h3&padding=1${SHADOWROCKET_HPKP_200}#${NODE_NAME[22]// /%20}%20${NODE_TAG[11]}%20http3
+http3://$(echo -n "${UUID[22]}:${UUID[22]}@${NAIVE_SERVER:-$SERVER_IP_2}:${PORT_NAIVE}" | base64 -w0)?peer=${NAIVE_SNI:-$TLS_SERVER}&alpn=h3&padding=1${SHADOWROCKET_HPKP_200}#${NODE_NAME[22]// /%20}%20${NODE_TAG[11]}%20http3
 "
   echo -n "$SHADOWROCKET_SUBSCRIBE" | sed -E '/^[ ]*#|^--/d' | sed '/^$/d' | base64 -w0 > ${WORK_DIR}/subscribe/shadowrocket
 
@@ -5595,9 +5639,9 @@ v2rayn://anytls/$(echo -n "{\"ConfigType\":11,\"CoreType\":24,\"ConfigVersion\":
 
   [ -n "$PORT_NAIVE" ] && local V2RAYN_SUBSCRIBE+="
 ----------------------------
-v2rayn://naive/$(echo -n "{\"ConfigType\":12,\"CoreType\":24,\"ConfigVersion\":4,\"Remarks\":\"${NODE_NAME[22]} ${NODE_TAG[11]} http2\",\"Address\":\"${NAIVE_SERVER:-$SERVER_IP}\",\"Port\":${PORT_NAIVE},\"Password\":\"${UUID[22]}\",\"Username\":\"${UUID[22]}\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${TLS_SERVER}\"${V2RAYN_CERT_200_JSON}}" | base64 -w0 | tr '+/' '-_' | tr -d '=')
+v2rayn://naive/$(echo -n "{\"ConfigType\":12,\"CoreType\":24,\"ConfigVersion\":4,\"Remarks\":\"${NODE_NAME[22]} ${NODE_TAG[11]} http2\",\"Address\":\"${NAIVE_SERVER:-$SERVER_IP}\",\"Port\":${PORT_NAIVE},\"Password\":\"${UUID[22]}\",\"Username\":\"${UUID[22]}\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${NAIVE_SNI:-$TLS_SERVER}\"${V2RAYN_CERT_200_JSON}}" | base64 -w0 | tr '+/' '-_' | tr -d '=')
 ----------------------------
-v2rayn://naive/$(echo -n "{\"ConfigType\":12,\"CoreType\":24,\"ConfigVersion\":4,\"Remarks\":\"${NODE_NAME[22]} ${NODE_TAG[11]} quic\",\"Address\":\"${NAIVE_SERVER:-$SERVER_IP}\",\"Port\":${PORT_NAIVE},\"Password\":\"${UUID[22]}\",\"Username\":\"${UUID[22]}\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${TLS_SERVER}\"${V2RAYN_CERT_200_JSON},\"ProtoExtraObj\":{\"CongestionControl\":\"bbr\",\"NaiveQuic\":true}}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
+v2rayn://naive/$(echo -n "{\"ConfigType\":12,\"CoreType\":24,\"ConfigVersion\":4,\"Remarks\":\"${NODE_NAME[22]} ${NODE_TAG[11]} quic\",\"Address\":\"${NAIVE_SERVER:-$SERVER_IP}\",\"Port\":${PORT_NAIVE},\"Password\":\"${UUID[22]}\",\"Username\":\"${UUID[22]}\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${NAIVE_SNI:-$TLS_SERVER}\"${V2RAYN_CERT_200_JSON},\"ProtoExtraObj\":{\"CongestionControl\":\"bbr\",\"NaiveQuic\":true}}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
 
   echo -n "$V2RAYN_SUBSCRIBE" | sed '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/d' | sed -E '/^[ ]*#|^[ ]+|^\{|^\}/d' | sed '/^$/d' | base64 -w0 > ${WORK_DIR}/subscribe/v2rayn
 
@@ -5686,9 +5730,9 @@ anytls://${UUID[21]}@${SERVER_IP_1}:${PORT_ANYTLS}?idle_session_check_interval=3
   [ -n "$PORT_NAIVE" ] && {
     local THRONE_SUBSCRIBE+="
 ----------------------------
-naive+https://${UUID[22]}:${UUID[22]}@${NAIVE_SERVER:-$SERVER_IP_1}:${PORT_NAIVE}?uot=1&security=tls&sni=${TLS_SERVER}${THRONE_CERT_200}#${NODE_NAME[22]// /%20}%20${NODE_TAG[11]}%20http2
+naive+https://${UUID[22]}:${UUID[22]}@${NAIVE_SERVER:-$SERVER_IP_1}:${PORT_NAIVE}?uot=1&security=tls&sni=${NAIVE_SNI:-$TLS_SERVER}${THRONE_CERT_200}#${NODE_NAME[22]// /%20}%20${NODE_TAG[11]}%20http2
 ----------------------------
-naive+quic://${UUID[22]}:${UUID[22]}@${NAIVE_SERVER:-$SERVER_IP_1}:${PORT_NAIVE}?congestion_control=bbr&security=tls&sni=${TLS_SERVER}${THRONE_CERT_200}#${NODE_NAME[22]// /%20}%20${NODE_TAG[11]}%20quic"
+naive+quic://${UUID[22]}:${UUID[22]}@${NAIVE_SERVER:-$SERVER_IP_1}:${PORT_NAIVE}?congestion_control=bbr&security=tls&sni=${NAIVE_SNI:-$TLS_SERVER}${THRONE_CERT_200}#${NODE_NAME[22]// /%20}%20${NODE_TAG[11]}%20quic"
   }
 
   echo -n "$THRONE_SUBSCRIBE" | sed -E '/^[ ]*#|^--/d' | sed '/^$/d' | base64 -w0 > ${WORK_DIR}/subscribe/throne
@@ -5781,7 +5825,7 @@ naive+quic://${UUID[22]}:${UUID[22]}@${NAIVE_SERVER:-$SERVER_IP_1}:${PORT_NAIVE}
   local NODE_REPLACE+="\"${NODE_NAME[21]} ${NODE_TAG[10]}\","
 
   [ -n "$PORT_NAIVE" ] &&
-  local OUTBOUND_REPLACE+=" { \"type\": \"naive\", \"tag\": \"${NODE_NAME[22]} ${NODE_TAG[11]} http2\", \"server\": \"${NAIVE_SERVER:-$SERVER_IP}\", \"server_port\": ${PORT_NAIVE}, \"username\": \"${UUID[22]}\", \"password\": \"${UUID[22]}\", \"udp_over_tcp\": true, \"quic\": false, \"tls\": { \"enabled\": true, ${NAIVE_CERT_JSON}\"server_name\": \"${TLS_SERVER}\" } }, { \"type\": \"naive\", \"tag\": \"${NODE_NAME[22]} ${NODE_TAG[11]} quic\", \"server\": \"${NAIVE_SERVER:-$SERVER_IP}\", \"server_port\": ${PORT_NAIVE}, \"username\": \"${UUID[22]}\", \"password\": \"${UUID[22]}\", \"udp_over_tcp\": false, \"quic\": true, \"quic_congestion_control\": \"bbr\", \"tls\": { \"enabled\": true, ${NAIVE_CERT_JSON}\"server_name\": \"${TLS_SERVER}\" } }," &&
+  local OUTBOUND_REPLACE+=" { \"type\": \"naive\", \"tag\": \"${NODE_NAME[22]} ${NODE_TAG[11]} http2\", \"server\": \"${NAIVE_SERVER:-$SERVER_IP}\", \"server_port\": ${PORT_NAIVE}, \"username\": \"${UUID[22]}\", \"password\": \"${UUID[22]}\", \"udp_over_tcp\": true, \"quic\": false, \"tls\": { \"enabled\": true, ${NAIVE_CERT_JSON}\"server_name\": \"${NAIVE_SNI:-$TLS_SERVER}\" } }, { \"type\": \"naive\", \"tag\": \"${NODE_NAME[22]} ${NODE_TAG[11]} quic\", \"server\": \"${NAIVE_SERVER:-$SERVER_IP}\", \"server_port\": ${PORT_NAIVE}, \"username\": \"${UUID[22]}\", \"password\": \"${UUID[22]}\", \"udp_over_tcp\": false, \"quic\": true, \"quic_congestion_control\": \"bbr\", \"tls\": { \"enabled\": true, ${NAIVE_CERT_JSON}\"server_name\": \"${NAIVE_SNI:-$TLS_SERVER}\" } }," &&
   local NODE_REPLACE+="\"${NODE_NAME[22]} ${NODE_TAG[11]} http2\",\"${NODE_NAME[22]} ${NODE_TAG[11]} quic\","
 
   {
@@ -6606,29 +6650,37 @@ manage_acme_certificate_menu() {
         if [ -s "/root/.acme.sh/${CERT_DOMAIN}_ecc/${CERT_DOMAIN}.key" ] && [ -s "/root/.acme.sh/${CERT_DOMAIN}_ecc/fullchain.cer" ]; then
           [ ! -d ${WORK_DIR}/cert ] && mkdir -p ${WORK_DIR}/cert
 
-          # 通过 acme.sh 官方命令进行安装，设置自动续期 reloadcmd，续期后自动重启 sing-box
+          # 安装商业证书到 cert_200.pem 和 private_200.key（专供 NaiveProxy 与 Nginx 使用，绝不覆盖 cert.pem/private.key）
           /root/.acme.sh/acme.sh --install-cert -d "$CERT_DOMAIN" --ecc \
-            --key-file "${WORK_DIR}/cert/private.key" \
-            --fullchain-file "${WORK_DIR}/cert/cert.pem" \
-            --reloadcmd "cp ${WORK_DIR}/cert/cert.pem ${WORK_DIR}/cert/cert_200.pem && systemctl restart sing-box && (systemctl reload nginx || true)"
+            --key-file "${WORK_DIR}/cert/private_200.key" \
+            --fullchain-file "${WORK_DIR}/cert/cert_200.pem" \
+            --reloadcmd "systemctl restart sing-box && (systemctl reload nginx || true)"
 
-          # 拷贝一份给 NaiveProxy 使用
-          cp "${WORK_DIR}/cert/cert.pem" "${WORK_DIR}/cert/cert_200.pem"
+          chmod 600 "${WORK_DIR}/cert/private_200.key" 2>/dev/null || true
 
-          # 自动修正现有 inbound 配置文件中的域名 (排除 argo 隧道相关的 vmess-ws 和 vless-ws-tls)
-          for FILE in ${WORK_DIR}/conf/*_inbounds.json; do
-            if [[ "$FILE" =~ "vless-ws-tls" ]]; then
-              continue
-            fi
-            if [ -s "$FILE" ] && grep -q 'certificate_path' "$FILE"; then
-              sed -i "s/\"server_name\":.*/\"server_name\":\"$CERT_DOMAIN\",/g" "$FILE"
+          # 若 Nginx 存在且有对应站点目录，同步证书到 Nginx
+          if [ -d "/etc/nginx/ssl" ]; then
+            mkdir -p "/etc/nginx/ssl/${CERT_DOMAIN}"
+            cp "${WORK_DIR}/cert/cert_200.pem" "/etc/nginx/ssl/${CERT_DOMAIN}/fullchain.cer" 2>/dev/null || true
+            cp "${WORK_DIR}/cert/private_200.key" "/etc/nginx/ssl/${CERT_DOMAIN}/${CERT_DOMAIN}.key" 2>/dev/null || true
+          fi
+
+          # 自动修正 NaiveProxy inbound 配置文件的证书路径与私钥路径 (绝不修改其他伪装/隧道协议)
+          for FILE in ${WORK_DIR}/conf/*_naive_inbounds.json; do
+            if [ -s "$FILE" ]; then
+              sed -i 's|"certificate_path":.*|"certificate_path":"'"${WORK_DIR}"'/cert/cert_200.pem",|' "$FILE"
+              sed -i 's|"key_path":.*|"key_path":"'"${WORK_DIR}"'/cert/private_200.key"|' "$FILE"
             fi
           done
+
+          # 重启 sing-box 生效
+          systemctl restart sing-box >/dev/null 2>&1 || true
+          systemctl reload nginx >/dev/null 2>&1 || true
 
           # 重新生成全套客户端订阅文件（包含 naive 绑定商业域名）
           export_list >/dev/null 2>&1 || true
 
-          [ "$L" = "C" ] && info "Let's Encrypt 证书申请与安装成功！已配置每日自动检查与续期。" || info "Let's Encrypt certificate applied & installed successfully! Auto-renew and restart scheduled."
+          [ "$L" = "C" ] && info "Let's Encrypt 证书申请与安装成功！已配置每日自动检查与续期，已精准绑定 NaiveProxy，其他节点保持防探测伪装。" || info "Let's Encrypt cert applied & installed for NaiveProxy! Other inbounds kept with camouflage SNI."
         else
           if [ "$ACME_MODE" = "1" ]; then
             [ "$L" = "C" ] && error "证书申请失败，请检查服务器 80 端口是否放行，且未被占用！" || error "Certificate application failed. Check if port 80 is open and not in use!"
@@ -6663,50 +6715,106 @@ manage_acme_certificate_menu() {
       ;;
     3)
       # 查看证书状态
+      clear
+      echo -e "======================================================"
+      [ "$L" = "C" ] && echo -e "               当前服务器证书状态总览" || echo -e "            Current Server Certificates Overview"
+      echo -e "======================================================"
+
+      # 1. 基础伪装自签证书 (用于 Hysteria 2 / AnyTLS 等节点)
       if [ -s "${WORK_DIR}/cert/cert.pem" ]; then
-        [ "$L" = "C" ] && info "--- 当前 Sing-box 正在使用的证书详情 ---" || info "--- Details of certificate currently used by Sing-box ---"
-        openssl x509 -in "${WORK_DIR}/cert/cert.pem" -text -noout | grep -E 'Subject:|Issuer:|Not After|DNS:'
+        local CAMOU_DOMAIN=$(openssl x509 -noout -ext subjectAltName -in "${WORK_DIR}/cert/cert.pem" 2>/dev/null | awk -F 'DNS:' '/DNS:/{gsub(/,.*/, "", $2); print $2}')
+        local CAMOU_ISSUER=$(openssl x509 -noout -issuer -in "${WORK_DIR}/cert/cert.pem" 2>/dev/null | sed 's/issuer=//')
+        local CAMOU_EXPIRE=$(openssl x509 -noout -enddate -in "${WORK_DIR}/cert/cert.pem" 2>/dev/null | cut -d= -f2)
+        local CAMOU_SHA256=$(openssl x509 -noout -fingerprint -sha256 -in "${WORK_DIR}/cert/cert.pem" 2>/dev/null | cut -d= -f2)
+
+        [ "$L" = "C" ] && info "🛡️  【基础伪装自签证书】(用于 Hysteria 2 / AnyTLS 节点)" || info "🛡️  [Base Camouflage Cert] (for Hysteria 2 / AnyTLS)"
+        echo -e "  - 证书路径: ${WORK_DIR}/cert/cert.pem"
+        echo -e "  - 伪装域名 (SNI): ${CAMOU_DOMAIN:-addons.mozilla.org}"
+        echo -e "  - 签发机构 (Issuer): ${CAMOU_ISSUER}"
+        echo -e "  - 到期时间: ${CAMOU_EXPIRE}"
+        echo -e "  - SHA256 指纹: ${CAMOU_SHA256}"
+        [ "$L" = "C" ] && echo -e "  - 架构说明: 配合客户端 SHA256 Pinning 强校验，实现 SNI 伪装并免疫中间人探测。" || echo -e "  - Note: Used with client SHA256 Pinning for censorship resistance."
       else
-        [ "$L" = "C" ] && warning "未找到已安装的证书文件。" || warning "No installed certificate found."
+        [ "$L" = "C" ] && warning "⚠️  未找到基础自签证书 (${WORK_DIR}/cert/cert.pem)" || warning "⚠️  Base certificate not found"
       fi
+      echo -e "------------------------------------------------------"
+
+      # 2. 商业 CA 证书 / NaiveProxy 专属证书
+      local NAIVE_CERT_FOUND=false
+      local TARGET_CERT=""
+      local TARGET_KEY=""
+      if [ -s "${WORK_DIR}/cert/cert_200.pem" ] && is_commercial_cert "${WORK_DIR}/cert/cert_200.pem"; then
+        TARGET_CERT="${WORK_DIR}/cert/cert_200.pem"
+        TARGET_KEY="${WORK_DIR}/cert/private_200.key"
+        NAIVE_CERT_FOUND=true
+      elif [ -d "/etc/nginx/ssl" ]; then
+        for D in /etc/nginx/ssl/*; do
+          if [ -d "$D" ] && [ -s "$D/fullchain.cer" ] && is_commercial_cert "$D/fullchain.cer"; then
+            TARGET_CERT="$D/fullchain.cer"
+            TARGET_KEY="$D/$(basename "$D").key"
+            NAIVE_CERT_FOUND=true
+            break
+          fi
+        done
+      fi
+
+      if [ "$NAIVE_CERT_FOUND" = "true" ] && [ -s "$TARGET_CERT" ]; then
+        local COMM_DOMAIN=$(openssl x509 -noout -ext subjectAltName -in "$TARGET_CERT" 2>/dev/null | awk -F 'DNS:' '/DNS:/{gsub(/,.*/, "", $2); print $2}')
+        [ -z "$COMM_DOMAIN" ] && COMM_DOMAIN=$(openssl x509 -noout -subject -in "$TARGET_CERT" 2>/dev/null | awk -F 'CN *= *' '{print $2}' | awk '{print $1}')
+        local COMM_ISSUER=$(openssl x509 -noout -issuer -in "$TARGET_CERT" 2>/dev/null | sed 's/issuer=//')
+        local COMM_EXPIRE=$(openssl x509 -noout -enddate -in "$TARGET_CERT" 2>/dev/null | cut -d= -f2)
+
+        [ "$L" = "C" ] && info "🌐 【商业 CA 证书】(用于 NaiveProxy / Nginx 伪装站)" || info "🌐 [Commercial CA Cert] (for NaiveProxy / Nginx)"
+        echo -e "  - 证书路径: ${TARGET_CERT}"
+        echo -e "  - 私钥路径: ${TARGET_KEY}"
+        echo -e "  - 绑定域名: ${COMM_DOMAIN}"
+        echo -e "  - 签发机构: ${COMM_ISSUER}"
+        echo -e "  - 到期时间: ${COMM_EXPIRE}"
+        [ "$L" = "C" ] && echo -e "  - 架构说明: 经权威 CA (Let's Encrypt 等) 签发，受 Chromium Cronet 原生受信。" || echo -e "  - Note: Issued by trusted CA for Chromium Cronet."
+      else
+        [ "$L" = "C" ] && warning "🌐 【商业 CA 证书】: 暂未配置或仅为临时自签名证书" || warning "🌐 [Commercial CA Cert]: Not configured or self-signed only"
+        [ "$L" = "C" ] && hint "   (NaiveProxy 需要有效商业 CA 证书，可通过选项 1 申请并绑定)" || hint "   (NaiveProxy requires commercial cert, apply via Option 1)"
+      fi
+      echo -e "------------------------------------------------------"
+
+      # 3. acme.sh 托管证书清单
+      [ "$L" = "C" ] && info "📋 【acme.sh 托管证书清单】" || info "📋 [acme.sh Managed Certificate List]"
+      if [ -x "/root/.acme.sh/acme.sh" ]; then
+        /root/.acme.sh/acme.sh --list
+      else
+        echo -e "  acme.sh 未安装或未在 /root/.acme.sh/ 找到。"
+      fi
+      echo -e "======================================================"
       reading "\n按任意键返回... " TEMP_KEY
       manage_acme_certificate_menu
       ;;
     4)
       # 回退并恢复使用系统自签证书
       if [ "$L" = "C" ]; then
-        reading " 是否确认删除 Let's Encrypt 证书并回退到原版自签证书？(y/n): " REVERT_CONFIRM
+        reading " 是否确认将 NaiveProxy 证书回退为默认自签证书？(y/n): " REVERT_CONFIRM
       else
-        reading " Are you sure you want to delete Let's Encrypt cert and revert to self-signed? (y/n): " REVERT_CONFIRM
+        reading " Are you sure you want to revert NaiveProxy cert to self-signed? (y/n): " REVERT_CONFIRM
       fi
 
       if [[ "${REVERT_CONFIRM,,}" = "y" ]]; then
-        local CURRENT_DOMAIN=$(openssl x509 -noout -ext subjectAltName -in "${WORK_DIR}/cert/cert.pem" 2>/dev/null | awk -F 'DNS:' '/DNS:/{gsub(/,.*/, "", $2); print $2}')
-        
-        [ "$L" = "C" ] && info "正在清理 acme.sh 证书续期计划..." || info "Cleaning up acme.sh cert schedule..."
-        if [ -n "$CURRENT_DOMAIN" ] && [ -x "/root/.acme.sh/acme.sh" ]; then
-          /root/.acme.sh/acme.sh --remove -d "$CURRENT_DOMAIN" --ecc >/dev/null 2>&1 || true
-          if [ -d "/root/.acme.sh/${CURRENT_DOMAIN}_ecc" ]; then
-            rm -rf "/root/.acme.sh/${CURRENT_DOMAIN}_ecc"
-          fi
-        fi
+        local CAMOU_DOMAIN=$(openssl x509 -noout -ext subjectAltName -in "${WORK_DIR}/cert/cert.pem" 2>/dev/null | awk -F 'DNS:' '/DNS:/{gsub(/,.*/, "", $2); print $2}')
+        CAMOU_DOMAIN=${CAMOU_DOMAIN:-"addons.mozilla.org"}
 
-        [ "$L" = "C" ] && info "正在重新生成默认自签证书 (addons.mozilla.org)..." || info "Re-generating default self-signed cert (addons.mozilla.org)..."
-        ssl_certificate "addons.mozilla.org"
-        
-        # 恢复现有配置文件中的域名为 addons.mozilla.org (排除 argo 隧道相关的 vmess-ws 和 vless-ws-tls)
-        for FILE in ${WORK_DIR}/conf/*_inbounds.json; do
-          if [[ "$FILE" =~ "vless-ws-tls" ]]; then
-            continue
-          fi
-          if [ -s "$FILE" ] && grep -q 'certificate_path' "$FILE"; then
-            sed -i 's/"server_name":.*/"server_name":"addons.mozilla.org",/g' "$FILE"
+        [ "$L" = "C" ] && info "正在将 NaiveProxy 证书重置为自签伪装证书 ($CAMOU_DOMAIN)..." || info "Reverting NaiveProxy cert to self-signed ($CAMOU_DOMAIN)..."
+        openssl req -new -x509 -days 200 -key ${WORK_DIR}/cert/private.key -out ${WORK_DIR}/cert/cert_200.pem -subj "/CN=${CAMOU_DOMAIN}" 2>/dev/null || true
+        rm -f ${WORK_DIR}/cert/private_200.key
+
+        # 恢复 naive 配置指向 private.key
+        for FILE in ${WORK_DIR}/conf/*_naive_inbounds.json; do
+          if [ -s "$FILE" ]; then
+            sed -i 's|"key_path":.*|"key_path":"'"${WORK_DIR}"'/cert/private.key"|' "$FILE"
           fi
         done
 
-        # 重启服务生效
+        # 重启服务生效并更新订阅
         systemctl restart sing-box >/dev/null 2>&1 || true
-        [ "$L" = "C" ] && info "成功回退到自签证书模式！" || info "Successfully reverted to self-signed certificate mode!"
+        export_list >/dev/null 2>&1 || true
+        [ "$L" = "C" ] && info "成功将 NaiveProxy 回退到自签证书模式！" || info "Successfully reverted NaiveProxy to self-signed mode!"
       else
         [ "$L" = "C" ] && info "已取消操作。" || info "Operation cancelled."
       fi
