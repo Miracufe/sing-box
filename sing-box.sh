@@ -5558,7 +5558,7 @@ export_list() {
     fi
 
     local CURR_NAIVE_SERVER_2="${NAIVE_SERVER}"
-    [ "$IS_NAIVE_COMMERCIAL" = "false" ] && CURR_NAIVE_SERVER_2="${SERVER_IP_2}"
+    { [ "$IS_NAIVE_COMMERCIAL" = "false" ] || [ "$DUAL_STACK_ACTIVE" = "true" ]; } && CURR_NAIVE_SERVER_2="${SERVER_IP_2}"
     [[ "$CURR_NAIVE_SERVER_2" =~ : && ! "$CURR_NAIVE_SERVER_2" =~ ^\[\[ ]] && CURR_NAIVE_SERVER_2="[[${CURR_NAIVE_SERVER_2}]]"
 
     [ -n "$PORT_XTLS_REALITY" ] && SHADOWROCKET_SUBSCRIBE+="
@@ -5681,7 +5681,7 @@ http3://$(echo -n "${UUID[22]}:${UUID[22]}@${CURR_NAIVE_SERVER_2}:${PORT_NAIVE}"
     fi
 
     local CURR_NAIVE_SERVER="${NAIVE_SERVER}"
-    [ "$IS_NAIVE_COMMERCIAL" = "false" ] && CURR_NAIVE_SERVER="${CURR_IP}"
+    { [ "$IS_NAIVE_COMMERCIAL" = "false" ] || [ "$DUAL_STACK_ACTIVE" = "true" ]; } && CURR_NAIVE_SERVER="${CURR_IP}"
 
     [ -n "$PORT_XTLS_REALITY" ] && V2RAYN_SUBSCRIBE+="
 ----------------------------
@@ -5855,7 +5855,7 @@ v2rayn://naive/$(echo -n "{\"ConfigType\":12,\"CoreType\":24,\"ConfigVersion\":4
     fi
 
     local CURR_NAIVE_SERVER_1="${NAIVE_SERVER}"
-    [ "$IS_NAIVE_COMMERCIAL" = "false" ] && CURR_NAIVE_SERVER_1="${SERVER_IP_1}"
+    { [ "$IS_NAIVE_COMMERCIAL" = "false" ] || [ "$DUAL_STACK_ACTIVE" = "true" ]; } && CURR_NAIVE_SERVER_1="${SERVER_IP_1}"
     [[ "$CURR_NAIVE_SERVER_1" =~ : && ! "$CURR_NAIVE_SERVER_1" =~ ^\[ ]] && CURR_NAIVE_SERVER_1="[${CURR_NAIVE_SERVER_1}]"
 
     [ -n "$PORT_XTLS_REALITY" ] && THRONE_SUBSCRIBE+="
@@ -5981,7 +5981,7 @@ naive+quic://${UUID[22]}:${UUID[22]}@${CURR_NAIVE_SERVER_1}:${PORT_NAIVE}?conges
     fi
 
     local CURR_NAIVE_SERVER="${NAIVE_SERVER}"
-    [ "$IS_NAIVE_COMMERCIAL" = "false" ] && CURR_NAIVE_SERVER="${CURR_IP}"
+    { [ "$IS_NAIVE_COMMERCIAL" = "false" ] || [ "$DUAL_STACK_ACTIVE" = "true" ]; } && CURR_NAIVE_SERVER="${CURR_IP}"
 
     [ -n "$PORT_XTLS_REALITY" ] &&
     OUTBOUND_REPLACE+=" { \"type\": \"vless\", \"tag\": \"${STACK_PREFIX}${NODE_NAME[11]} ${NODE_TAG[0]}\", \"server\":\"${CURR_IP}\", \"server_port\":${PORT_XTLS_REALITY}, \"uuid\":\"${UUID[11]}\", \"flow\":\"${FLOW}\", \"tls\":{ \"enabled\":true, \"server_name\":\"addons.mozilla.org\", \"utls\":{ \"enabled\":true, \"fingerprint\":\"${FINGER_PRINT}\" }, \"reality\":{ \"enabled\":true, \"public_key\":\"${REALITY_PUBLIC[11]}\", \"short_id\":\"\" } }, \"multiplex\": { \"enabled\": ${MULTIPLEX_PADDING_ENABLED}, \"protocol\": \"h2mux\", \"max_connections\": 8, \"min_streams\": 16, \"padding\": ${MULTIPLEX_PADDING_ENABLED}, \"brutal\":{ \"enabled\":${VISION_BRUTAL_ENABLED}, \"up_mbps\":1000, \"down_mbps\":1000 } } }," &&
