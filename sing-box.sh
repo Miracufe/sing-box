@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # 当前脚本版本号
-VERSION='v1.3.25 (2026.09.16)'
+VERSION='v1.3.24 (2026.08.30)'
 
 # Github 反代加速代理
 GITHUB_PROXY=('https://hub.glowp.xyz/' 'https://proxy.vvvv.ee/')
@@ -22,7 +22,7 @@ NODE_TAG=("xtls-reality" "hysteria2" "tuic" "ShadowTLS" "shadowsocks" "trojan" "
 CONSECUTIVE_PORTS=${#PROTOCOL_LIST[@]}
 CDN_DOMAIN=("skk.moe" "ip.sb" "time.is" "cfip.xxxxxxxx.tk" "bestcf.top" "cdn.2020111.xyz" "xn--b6gac.eu.org" "cf.090227.xyz")
 SUBSCRIBE_TEMPLATE="https://raw.githubusercontent.com/fscarmen/client_template/main"
-DEFAULT_NEWEST_VERSION='1.15.0-alpha.4'
+DEFAULT_NEWEST_VERSION='1.14.0-beta.17'
 FINGER_PRINT='chrome'
 STEP_NUM=0      # 当前步骤编号（安装流程中动态递增）
 TOTAL_STEPS=''  # 总步骤数（协议确定后动态计算）
@@ -40,8 +40,8 @@ mkdir -p "$TEMP_DIR"
 
 E[0]="Language:\n 1. English (default) \n 2. 简体中文"
 C[0]="${E[0]}"
-E[1]="Add Hysteria2 ignore_client_bandwidth toggle in [sb -d], default off"
-C[1]="[sb -d] 新增 Hysteria2 ignore_client_bandwidth 开关，新安装默认关闭"
+E[1]="1. Add no-TUN environment support; 2. Fix Alpine OpenRC service stop error"
+C[1]="1. 新增无 TUN 环境支持; 2. 修复 Alpine OpenRC 服务停止误报"
 E[2]="Downloading Sing-box. Please wait a seconds ..."
 C[2]="下载 Sing-box 中，请稍等 ..."
 E[3]="Input errors up to 5 times.The script is aborted."
@@ -412,14 +412,6 @@ E[185]="New WARP endpoint:\n IPv6: \${ADDRESS6}\n Private Key: \${PRIVATE_KEY}\n
 C[185]="新 WARP 端点:\n IPv6: \${ADDRESS6}\n Private Key: \${PRIVATE_KEY}\n Reserved: [\${R1}, \${R2}, \${R3}]"
 E[186]="Hysteria2 Realm and port hopping cannot be used together (choose one). Realm is for NAT VPS without public inbound access. If you enable Realm, port hopping will be skipped."
 C[186]="Hysteria2 Realm 与端口跳跃不能同时使用（二选一）。Realm 适用于没有公网入站的 NAT 机器；启用 Realm 后将跳过端口跳跃。"
-E[187]="Hysteria2 force clients to use the BBR CC -> the declared up/down, i.e. Hysteria CC (\"ignore_client_bandwidth\": false)"
-C[187]="Hysteria2 强制客户端使用 BBR 拥塞控制 -> 声明的 up/down，即 Hysteria CC (\"ignore_client_bandwidth\": false)"
-E[188]="Hysteria2 the declared up/down, i.e. Hysteria CC (default) -> force clients to use the BBR CC (\"ignore_client_bandwidth\": true)"
-C[188]="Hysteria2 声明的 up/down，即 Hysteria CC（默认）-> 强制客户端使用 BBR 拥塞控制 (\"ignore_client_bandwidth\": true)"
-E[189]="Enabled. ignore_client_bandwidth: true -> commands clients to use the BBR CC instead of Hysteria CC (up_mbps/down_mbps not set). Client subscriptions no longer include up/down."
-C[189]="已启用。ignore_client_bandwidth: true —— 命令客户端使用 BBR 拥塞控制而非 Hysteria CC（未设置 up/down）。客户端订阅不再包含 up/down。"
-E[190]="Disabled. When up_mbps/down_mbps are set, clients are denied to use the BBR CC"
-C[190]="已关闭。当设置 up/down 时，禁止客户端使用 BBR 拥塞控制"
 
 # 自定义字体彩色，read 函数
 warning() { echo -e "\033[31m\033[01m$*\033[0m"; }  # 红色
@@ -762,21 +754,6 @@ change_config() {
   if ls ${WORK_DIR}/conf/*_${NODE_TAG[1]}_inbounds.json >/dev/null 2>&1; then
     local HY2_LINE=''
     [ -s ${WORK_DIR}/subscribe/proxies ] && HY2_LINE=$(grep 'type: hysteria2' ${WORK_DIR}/subscribe/proxies)
-    # 读取服务端 ignore_client_bandwidth 当前值：true 时服务端忽略客户端带宽、双端使用 BBR，订阅不再下发 up/down
-    local HY2_CONF_NOW=$(ls ${WORK_DIR}/conf/*_${NODE_TAG[1]}_inbounds.json 2>/dev/null | sed -n '1p')
-    local HY2_IGNORE_NOW=false
-    [ -s "$HY2_CONF_NOW" ] && HY2_IGNORE_NOW=$(jq_exec -r '.inbounds[]? | select(.type == "hysteria2") | .ignore_client_bandwidth // false' "$HY2_CONF_NOW" 2>/dev/null)
-    if [ "$HY2_IGNORE_NOW" = 'true' ]; then
-      IS_HY2_IGNORE=is_hy2_ignore
-      MENU_IDX+=(187)
-    else
-      unset IS_HY2_IGNORE
-      MENU_IDX+=(188)
-    fi
-    MENU_KEY+=(hy2cc) && MENU_VAL+=("")
-
-    # 服务端已忽略客户端带宽时，订阅不含 up/down，带宽修改项无意义，隐藏
-    if [ "$IS_HY2_IGNORE" != 'is_hy2_ignore' ]; then
     if [[ "$HY2_LINE" =~ up:[[:space:]]*\"([0-9]+)[[:space:]]*Mbps\".*down:[[:space:]]*\"([0-9]+)[[:space:]]*Mbps\" ]]; then
       HY2_UP_NOW="${BASH_REMATCH[1]}"
       HY2_DOWN_NOW="${BASH_REMATCH[2]}"
@@ -788,7 +765,6 @@ change_config() {
     HY2_DOWN_NOW=${HY2_DOWN_NOW:-1000}
 
     MENU_IDX+=(140) && MENU_KEY+=(hy2bw) && MENU_VAL+=("${HY2_UP_NOW}/${HY2_DOWN_NOW}")
-    fi
 
     if grep -q 'realm-opts' <<< "$HY2_LINE"; then
       local HY2_REALM_ACTION="$(text 63)"
@@ -861,38 +837,6 @@ change_config() {
     [ -s ${WORK_DIR}/subscribe/proxies ] && sed -i -E "s/(up: \")([0-9]+)( Mbps\")/\1${HY2_UP}\3/g; s/(down: \")([0-9]+)( Mbps\")/\1${HY2_DOWN}\3/g" ${WORK_DIR}/subscribe/proxies
     hint " $(text 112) "
     export_list
-    return
-  elif [ "$KEY" = "hy2cc" ]; then
-    # 切换 Hysteria2 服务端 ignore_client_bandwidth：true = 忽略客户端带宽、双端 BBR，订阅不含 up/down
-    local HY2_CONF_NOW=$(ls ${WORK_DIR}/conf/*_${NODE_TAG[1]}_inbounds.json 2>/dev/null | sed -n '1p')
-    if [ -s "$HY2_CONF_NOW" ]; then
-      local TMP_FILE="${HY2_CONF_NOW}.tmp"
-      local HY2_IGNORE_NOW=$(jq_exec -r '.inbounds[]? | select(.type == "hysteria2") | .ignore_client_bandwidth // false' "$HY2_CONF_NOW" 2>/dev/null)
-      if [ "$HY2_IGNORE_NOW" = 'true' ]; then
-        # 已开启 -> 关闭：订阅将重新包含 up/down，复用 hy2bw 的输入文案询问
-        local HY2_UP HY2_DOWN
-        while true; do
-          reading " $(text 141) " HY2_UP
-          [[ "$HY2_UP" =~ ^[1-9][0-9]*$ ]] && break
-          warning " $(text 143) "
-        done
-        while true; do
-          reading " $(text 142) " HY2_DOWN
-          [[ "$HY2_DOWN" =~ ^[1-9][0-9]*$ ]] && break
-          warning " $(text 143) "
-        done
-        jq_exec '.inbounds |= map(if .type == "hysteria2" then .ignore_client_bandwidth = false else . end)' "$HY2_CONF_NOW" > "$TMP_FILE" && mv "$TMP_FILE" "$HY2_CONF_NOW"
-        unset IS_HY2_IGNORE
-        hint " $(text 190) "
-      else
-        # 已关闭 -> 开启：服务端忽略客户端带宽，客户端订阅不再下发 up/down
-        jq_exec '.inbounds |= map(if .type == "hysteria2" then .ignore_client_bandwidth = true else . end)' "$HY2_CONF_NOW" > "$TMP_FILE" && mv "$TMP_FILE" "$HY2_CONF_NOW"
-        IS_HY2_IGNORE=is_hy2_ignore
-        hint " $(text 189) "
-      fi
-      cmd_systemctl reload sing-box
-      export_list
-    fi
     return
   elif [ "$KEY" = "hy2realm" ]; then
     # 添加 / 删除 Hysteria2 Realm；菜单已明确显示开启/关闭动作，这里不再二次确认 Realm 本身
@@ -4352,11 +4296,11 @@ sing-box_json() {
             ],
             "tls":{
                 "enabled":true,
-                "server_name":"${TLS_SERVER}",
+                "server_name":"addons.mozilla.org",
                 "reality":{
                     "enabled":true,
                     "handshake":{
-                        "server":"${TLS_SERVER}",
+                        "server":"addons.mozilla.org",
                         "server_port":443
                     },
                     "private_key":"${REALITY_PRIVATE[11]}",
@@ -4387,10 +4331,6 @@ EOF
     [ "$IS_HOPPING" = 'is_hopping' ] && add_port_hopping_nat $PORT_HOPPING_START $PORT_HOPPING_END $PORT_HYSTERIA2
     NODE_NAME[12]=${NODE_NAME[12]:-"$NODE_NAME_CONFIRM"} && UUID[12]=${UUID[12]:-"$UUID_CONFIRM"}
     HY2_REALM_ID="${HY2_REALM_ID:-${UUID[12]}}"
-    # 保留已开启的 ignore_client_bandwidth，避免重装/改协议被模板冲回默认
-    local HY2_IGNORE_GEN=false
-    [ -s ${WORK_DIR}/conf/12_${NODE_TAG[1]}_inbounds.json ] && HY2_IGNORE_GEN=$(jq_exec -r '.inbounds[]? | select(.type == "hysteria2") | .ignore_client_bandwidth // false' ${WORK_DIR}/conf/12_${NODE_TAG[1]}_inbounds.json 2>/dev/null)
-    [ "$HY2_IGNORE_GEN" = 'true' ] || HY2_IGNORE_GEN=false
     local HY2_REALM_CONFIG=""
     if [ "$IS_HY2_REALM" = 'is_hy2_realm' ]; then
       HY2_REALM_CONFIG=$(cat <<EOF_REALM
@@ -4422,7 +4362,7 @@ EOF_REALM
                     "password":"${UUID[12]}"
                 }
             ],
-            "ignore_client_bandwidth":${HY2_IGNORE_GEN}${HY2_REALM_CONFIG},
+            "ignore_client_bandwidth":false${HY2_REALM_CONFIG},
             "tls":{
                 "enabled":true,
                 "alpn":[
@@ -4712,11 +4652,11 @@ EOF
             ],
             "tls":{
                 "enabled":true,
-                "server_name":"${TLS_SERVER}",
+                "server_name":"addons.mozilla.org",
                 "reality":{
                     "enabled":true,
                     "handshake":{
-                        "server":"${TLS_SERVER}",
+                        "server":"addons.mozilla.org",
                         "server_port":443
                     },
                     "private_key":"${REALITY_PRIVATE[19]}",
@@ -4764,11 +4704,11 @@ EOF
             ],
             "tls":{
                 "enabled":true,
-                "server_name":"${TLS_SERVER}",
+                "server_name":"addons.mozilla.org",
                 "reality":{
                     "enabled":true,
                     "handshake":{
-                        "server":"${TLS_SERVER}",
+                        "server":"addons.mozilla.org",
                         "server_port":443
                     },
                     "private_key":"${REALITY_PRIVATE[20]}",
@@ -5030,7 +4970,7 @@ EOF
 
 # 获取原有各协议的参数，先清空所有的 key-value
 fetch_nodes_value() {
-  unset NODE_NAME PORT_XTLS_REALITY UUID TLS_SERVER REALITY_PRIVATE REALITY_PUBLIC PORT_HYSTERIA2 HY2_REALM_ID IS_HY2_REALM IS_HY2_IGNORE IS_HY2_WARP PORT_TUIC TUIC_PASSWORD TUIC_CONGESTION_CONTROL PORT_SHADOWTLS SHADOWTLS_PASSWORD SHADOWSOCKS_METHOD PORT_SHADOWSOCKS PORT_TROJAN TROJAN_PASSWORD PORT_VMESS_WS VMESS_WS_PATH WS_SERVER_IP WS_SERVER_IP_SHOW VMESS_HOST_DOMAIN CDN CDN_PORT PORT_VLESS_WS VLESS_WS_PATH VLESS_HOST_DOMAIN PORT_H2_REALITY PORT_GRPC_REALITY ARGO_DOMAIN PORT_ANYTLS PORT_NAIVE SELF_SIGNED_FINGERPRINT_SHA256 SELF_SIGNED_FINGERPRINT_BASE64
+  unset NODE_NAME PORT_XTLS_REALITY UUID TLS_SERVER REALITY_PRIVATE REALITY_PUBLIC PORT_HYSTERIA2 HY2_REALM_ID IS_HY2_REALM IS_HY2_WARP PORT_TUIC TUIC_PASSWORD TUIC_CONGESTION_CONTROL PORT_SHADOWTLS SHADOWTLS_PASSWORD SHADOWSOCKS_METHOD PORT_SHADOWSOCKS PORT_TROJAN TROJAN_PASSWORD PORT_VMESS_WS VMESS_WS_PATH WS_SERVER_IP WS_SERVER_IP_SHOW VMESS_HOST_DOMAIN CDN CDN_PORT PORT_VLESS_WS VLESS_WS_PATH VLESS_HOST_DOMAIN PORT_H2_REALITY PORT_GRPC_REALITY ARGO_DOMAIN PORT_ANYTLS PORT_NAIVE SELF_SIGNED_FINGERPRINT_SHA256 SELF_SIGNED_FINGERPRINT_BASE64
 
   # 获取公共数据
   ls ${WORK_DIR}/conf/*-ws*inbounds.json >/dev/null 2>&1 && SERVER_IP=$(awk -F '"' '/"WS_SERVER_IP_SHOW"/{print $4; exit}' ${WORK_DIR}/conf/*-ws*inbounds.json) || SERVER_IP=$([ -s ${WORK_DIR}/list ] && grep -A1 '"tag"' ${WORK_DIR}/list | sed -E '/-ws(-tls)*",$/{N;d}' | awk -F '"' '/"server"/{count++; if (count == 1) {print $4; exit}}')
@@ -5073,11 +5013,6 @@ fetch_nodes_value() {
     UUID[12]=$(awk -F '"' '/"password"[[:space:]]*:/ {count++; if (count == 1) {print $4; exit}}' <<< "$JSON")
     HY2_UP=${HY2_UP:-"$([ -s $WORK_DIR/list ] && sed -n '/type: hysteria2/ s/.*,[ ]*up:[ ]*"\([0-9]\+\)[ ]*Mbps.*/\1/gp' $WORK_DIR/list)"}
     HY2_DOWN=${HY2_DOWN:-"$([ -s $WORK_DIR/list ] && sed -n '/type: hysteria2/ s/.*,[ ]*down:[ ]*"\([0-9]\+\)[ ]*Mbps.*/\1/gp' $WORK_DIR/list)"}
-    if grep -q '"ignore_client_bandwidth"[[:space:]]*:[[:space:]]*true' <<< "$JSON"; then
-      IS_HY2_IGNORE=is_hy2_ignore
-    else
-      unset IS_HY2_IGNORE
-    fi
     if grep -q '"realm"[[:space:]]*:' <<< "$JSON"; then
       IS_HY2_REALM=is_hy2_realm
       HY2_REALM_ID=$(awk -F '"' '/"realm_id"[[:space:]]*:/{print $4; exit}' <<< "$JSON")
@@ -5270,6 +5205,26 @@ export_list() {
 
   local CERT_URL_1=$(awk '{printf "%s,", $0}' ${WORK_DIR}/cert/cert.pem | sed 's/ /%20/g; s/,$//') &&
   local CERT_URL_2=$(awk '{printf "%s\\r\\n", $0}' ${WORK_DIR}/cert/cert.pem)
+
+  local IS_COMMERCIAL_CERT=false
+  if [ -s "${WORK_DIR}/cert/cert.pem" ]; then
+    if openssl verify "${WORK_DIR}/cert/cert.pem" >/dev/null 2>&1; then
+      IS_COMMERCIAL_CERT=true
+    fi
+  fi
+
+  local CLASH_FP=""
+  local CERT_PINNING_JSON=""
+  local SHADOWROCKET_HPKP=""
+  local V2RAYN_CERT_JSON=""
+  local THRONE_CERT=""
+  if [ "$IS_COMMERCIAL_CERT" = "false" ]; then
+    CLASH_FP=", fingerprint: ${SELF_SIGNED_FINGERPRINT_SHA256}"
+    CERT_PINNING_JSON="\\\"certificate_public_key_sha256\\\": [\\\"$SELF_SIGNED_FINGERPRINT_BASE64\\\"],"
+    SHADOWROCKET_HPKP="&hpkp=${SELF_SIGNED_FINGERPRINT_SHA256}"
+    V2RAYN_CERT_JSON=",\\\"Cert\\\":\\\"${CERT_URL_2}\\\""
+    THRONE_CERT="&tls_certificate=${CERT_URL_1}"
+  fi
   [ -s ${WORK_DIR}/cert/cert_200.pem ] &&
   local CERT_200_URL_1=$(awk '{printf "%s,", $0}' ${WORK_DIR}/cert/cert_200.pem | sed 's/,$//') &&
   local CERT_200_URL_2=$(awk '{printf "%s\\r\\n", $0}' ${WORK_DIR}/cert/cert_200.pem)
@@ -5279,21 +5234,39 @@ export_list() {
 
   # naive 协议的特殊处理
   if [ -n "$PORT_NAIVE" ]; then
-    # 在 -n 查看节点时，如 cert_200.pem 过期 / 缺失 / SNI 不一致则自动更新
-    ssl_certificate "$TLS_SERVER" naive_only
+    if [ "$IS_COMMERCIAL_CERT" = "true" ]; then
+      # 商用 CA 证书模式下：严禁生成自签名证书，确保 cert_200.pem 同步商用证书，且节点连接地址必须使用域名以防 Cronet DNS 劫持
+      cp "${WORK_DIR}/cert/cert.pem" "${WORK_DIR}/cert/cert_200.pem" 2>/dev/null || true
+      local NAIVE_SERVER="${TLS_SERVER}"
+    else
+      # 自签证书模式下：在 -n 查看节点时，如 cert_200.pem 过期 / 缺失 / SNI 不一致则自动更新
+      ssl_certificate "$TLS_SERVER" naive_only
+      local NAIVE_SERVER="${SERVER_IP}"
+    fi
 
-    # 读取 naive 自签证书并格式化为 JSON 字符串数组内容；多行/单行位置共用这一个变量
+    # 读取 naive 证书并格式化为 JSON 字符串数组内容；多行/单行位置共用这一个变量
     local CERT200_JSON=$(awk 'BEGIN{sep=""} {gsub(/\\/,"\\\\"); gsub(/"/,"\\\""); printf "%s\"%s\"", sep, $0; sep=",\n"}' "${WORK_DIR}/cert/cert_200.pem")
 
-    # 获取 naive 自签名证书的指纹
+    # 获取 naive 证书的指纹
     local SELF_SIGNED_200_FINGERPRINT_SHA256=$(openssl x509 -fingerprint -noout -sha256 -in ${WORK_DIR}/cert/cert_200.pem | awk -F '=' '{print $NF}')
+  fi
+
+  local SHADOWROCKET_HPKP_200=""
+  local NAIVE_CERT_JSON=""
+  local V2RAYN_CERT_200_JSON=""
+  local THRONE_CERT_200=""
+  if [ "$IS_COMMERCIAL_CERT" = "false" ] && [ -n "$PORT_NAIVE" ]; then
+    SHADOWROCKET_HPKP_200="${SHADOWROCKET_HPKP_200}"
+    NAIVE_CERT_JSON="\\\"certificate\\\": [$(tr -d '\n' <<< "$CERT200_JSON")], "
+    V2RAYN_CERT_200_JSON=",\\\"Cert\\\":\\\"${CERT_200_URL_2}\\\""
+    THRONE_CERT_200="&tls_certificate=${CERT_200_URL_1}"
   fi
 
   # 生成各订阅文件
   # 生成 Clash proxy providers 订阅文件
   local CLASH_SUBSCRIBE='proxies:'
 
-  [ -n "$PORT_XTLS_REALITY" ] && local CLASH_XTLS_REALITY="- {name: \"${NODE_NAME[11]} ${NODE_TAG[0]}\", type: vless, server: ${SERVER_IP}, port: ${PORT_XTLS_REALITY}, uuid: ${UUID[11]}, network: tcp, udp: true, tls: true${VISION_OR_MUX_CLASH}, servername: ${TLS_SERVER}, client-fingerprint: ${FINGER_PRINT}, reality-opts: {public-key: ${REALITY_PUBLIC[11]}, short-id: \"\"}, smux: { enabled: ${MULTIPLEX_PADDING_ENABLED}, protocol: 'h2mux', padding: ${MULTIPLEX_PADDING_ENABLED}, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${VISION_BRUTAL_ENABLED}, up: '1000 Mbps', down: '1000 Mbps' } }" &&
+  [ -n "$PORT_XTLS_REALITY" ] && local CLASH_XTLS_REALITY="- {name: \"${NODE_NAME[11]} ${NODE_TAG[0]}\", type: vless, server: ${SERVER_IP}, port: ${PORT_XTLS_REALITY}, uuid: ${UUID[11]}, network: tcp, udp: true, tls: true${VISION_OR_MUX_CLASH}, servername: addons.mozilla.org, client-fingerprint: ${FINGER_PRINT}, reality-opts: {public-key: ${REALITY_PUBLIC[11]}, short-id: \"\"}, smux: { enabled: ${MULTIPLEX_PADDING_ENABLED}, protocol: 'h2mux', padding: ${MULTIPLEX_PADDING_ENABLED}, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${VISION_BRUTAL_ENABLED}, up: '1000 Mbps', down: '1000 Mbps' } }" &&
   local CLASH_SUBSCRIBE+="
   $CLASH_XTLS_REALITY
 "
@@ -5301,21 +5274,18 @@ export_list() {
     [[ -n "$PORT_HOPPING_START" && -n "$PORT_HOPPING_END" ]] && local CLASH_HOPPING=" ports: ${PORT_HOPPING_START}-${PORT_HOPPING_END}, hop-interval: 30,"
     local HY2_UP=${HY2_UP:-200}
     local HY2_DOWN=${HY2_DOWN:-1000}
-    # 服务端忽略客户端带宽（BBR）时，各客户端订阅均不包含 up/down
-    local HY2_CLASH_BW=" up: \"${HY2_UP} Mbps\", down: \"${HY2_DOWN} Mbps\","
-    [ "$IS_HY2_IGNORE" = 'is_hy2_ignore' ] && HY2_CLASH_BW=""
     local CLASH_REALM_OPTS=""
     if [ "$IS_HY2_REALM" = 'is_hy2_realm' ]; then
       HY2_REALM_ID="${HY2_REALM_ID:-${UUID[12]}}"
       CLASH_REALM_OPTS=", realm-opts: {enable: true, server-url: \"https://realm.hy2.io\", token: public, realm-id: \"${HY2_REALM_ID}\", stun-servers: [turn.cloudflare.com:3478, stun.nextcloud.com:3478, stun.sip.us:3478, global.stun.twilio.com:3478]}"
     fi
-    local CLASH_HYSTERIA2="- {name: \"${NODE_NAME[12]} ${NODE_TAG[1]}\", type: hysteria2, server: ${SERVER_IP}, port: ${PORT_HYSTERIA2},${CLASH_HOPPING}${HY2_CLASH_BW} password: ${UUID[12]}, sni: ${TLS_SERVER}, skip-cert-verify: false, fingerprint: ${SELF_SIGNED_FINGERPRINT_SHA256}${CLASH_REALM_OPTS}}" &&
+    local CLASH_HYSTERIA2="- {name: \"${NODE_NAME[12]} ${NODE_TAG[1]}\", type: hysteria2, server: ${SERVER_IP}, port: ${PORT_HYSTERIA2},${CLASH_HOPPING} up: \"${HY2_UP} Mbps\", down: \"${HY2_DOWN} Mbps\", password: ${UUID[12]}, sni: ${TLS_SERVER}, skip-cert-verify: false${CLASH_FP}${CLASH_REALM_OPTS}}" &&
     local CLASH_SUBSCRIBE+="
   $CLASH_HYSTERIA2
 "
   fi
 
-  [ -n "$PORT_TUIC" ] && local CLASH_TUIC="- {name: \"${NODE_NAME[13]} ${NODE_TAG[2]}\", type: tuic, server: ${SERVER_IP}, port: ${PORT_TUIC}, uuid: ${UUID[13]}, password: ${TUIC_PASSWORD}, alpn: [h3], reduce-rtt: true, request-timeout: 8000, udp-relay-mode: native, congestion-controller: $TUIC_CONGESTION_CONTROL, sni: ${TLS_SERVER}, skip-cert-verify: false, fingerprint: ${SELF_SIGNED_FINGERPRINT_SHA256}}" &&
+  [ -n "$PORT_TUIC" ] && local CLASH_TUIC="- {name: \"${NODE_NAME[13]} ${NODE_TAG[2]}\", type: tuic, server: ${SERVER_IP}, port: ${PORT_TUIC}, uuid: ${UUID[13]}, password: ${TUIC_PASSWORD}, alpn: [h3], reduce-rtt: true, request-timeout: 8000, udp-relay-mode: native, congestion-controller: $TUIC_CONGESTION_CONTROL, sni: ${TLS_SERVER}, skip-cert-verify: false${CLASH_FP}}" &&
   local CLASH_SUBSCRIBE+="
   $CLASH_TUIC
 "
@@ -5328,7 +5298,7 @@ export_list() {
   local CLASH_SUBSCRIBE+="
   $CLASH_SHADOWSOCKS
 "
-  [ -n "$PORT_TROJAN" ] && local CLASH_TROJAN="- {name: \"${NODE_NAME[16]} ${NODE_TAG[5]}\", type: trojan, server: ${SERVER_IP}, port: $PORT_TROJAN, password: $TROJAN_PASSWORD, client-fingerprint: ${FINGER_PRINT}, sni: ${TLS_SERVER}, skip-cert-verify: false, fingerprint: ${SELF_SIGNED_FINGERPRINT_SHA256}, smux: { enabled: true, protocol: 'h2mux', padding: true, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${IS_BRUTAL}, up: '1000 Mbps', down: '1000 Mbps' } }" &&
+  [ -n "$PORT_TROJAN" ] && local CLASH_TROJAN="- {name: \"${NODE_NAME[16]} ${NODE_TAG[5]}\", type: trojan, server: ${SERVER_IP}, port: $PORT_TROJAN, password: $TROJAN_PASSWORD, client-fingerprint: ${FINGER_PRINT}, sni: ${TLS_SERVER}, skip-cert-verify: false${CLASH_FP}, smux: { enabled: true, protocol: 'h2mux', padding: true, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${IS_BRUTAL}, up: '1000 Mbps', down: '1000 Mbps' } }" &&
   local CLASH_SUBSCRIBE+="
   $CLASH_TROJAN
 "
@@ -5376,17 +5346,17 @@ export_list() {
     fi
   fi
 
-  [ -n "$PORT_H2_REALITY" ] && local CLASH_H2_REALITY="- {name: \"${NODE_NAME[19]} ${NODE_TAG[8]}\", type: vless, server: ${SERVER_IP}, port: ${PORT_H2_REALITY}, uuid: ${UUID[19]}, network: http, tls: true, servername: ${TLS_SERVER}, client-fingerprint: ${FINGER_PRINT}, reality-opts: { public-key: ${REALITY_PUBLIC[19]}, short-id: \"\" }, smux: { enabled: true, protocol: 'h2mux', padding: true, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${IS_BRUTAL}, up: '1000 Mbps', down: '1000 Mbps' } }" &&
+  [ -n "$PORT_H2_REALITY" ] && local CLASH_H2_REALITY="- {name: \"${NODE_NAME[19]} ${NODE_TAG[8]}\", type: vless, server: ${SERVER_IP}, port: ${PORT_H2_REALITY}, uuid: ${UUID[19]}, network: http, tls: true, servername: addons.mozilla.org, client-fingerprint: ${FINGER_PRINT}, reality-opts: { public-key: ${REALITY_PUBLIC[19]}, short-id: \"\" }, smux: { enabled: true, protocol: 'h2mux', padding: true, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${IS_BRUTAL}, up: '1000 Mbps', down: '1000 Mbps' } }" &&
   local CLASH_SUBSCRIBE+="
   $CLASH_H2_REALITY
 "
 
-  [ -n "$PORT_GRPC_REALITY" ] && local CLASH_GRPC_REALITY="- {name: \"${NODE_NAME[20]} ${NODE_TAG[9]}\", type: vless, server: ${SERVER_IP}, port: ${PORT_GRPC_REALITY}, uuid: ${UUID[20]}, network: grpc, tls: true, udp: true, flow: , client-fingerprint: ${FINGER_PRINT}, servername: ${TLS_SERVER}, grpc-opts: {  grpc-service-name: \"grpc\" }, reality-opts: { public-key: ${REALITY_PUBLIC[20]}, short-id: \"\" }, smux: { enabled: true, protocol: 'h2mux', padding: true, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${IS_BRUTAL}, up: '1000 Mbps', down: '1000 Mbps' } }" &&
+  [ -n "$PORT_GRPC_REALITY" ] && local CLASH_GRPC_REALITY="- {name: \"${NODE_NAME[20]} ${NODE_TAG[9]}\", type: vless, server: ${SERVER_IP}, port: ${PORT_GRPC_REALITY}, uuid: ${UUID[20]}, network: grpc, tls: true, udp: true, flow: , client-fingerprint: ${FINGER_PRINT}, servername: addons.mozilla.org, grpc-opts: {  grpc-service-name: \"grpc\" }, reality-opts: { public-key: ${REALITY_PUBLIC[20]}, short-id: \"\" }, smux: { enabled: true, protocol: 'h2mux', padding: true, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${IS_BRUTAL}, up: '1000 Mbps', down: '1000 Mbps' } }" &&
   local CLASH_SUBSCRIBE+="
   $CLASH_GRPC_REALITY
 "
 
-  [ -n "$PORT_ANYTLS" ] && local CLASH_ANYTLS="- {name: \"${NODE_NAME[21]} ${NODE_TAG[10]}\", type: anytls, server: ${SERVER_IP}, port: $PORT_ANYTLS, password: ${UUID[21]}, client-fingerprint: ${FINGER_PRINT}, udp: true, idle-session-check-interval: 30, idle-session-timeout: 30, sni: ${TLS_SERVER}, skip-cert-verify: false, fingerprint: ${SELF_SIGNED_FINGERPRINT_SHA256} }" &&
+  [ -n "$PORT_ANYTLS" ] && local CLASH_ANYTLS="- {name: \"${NODE_NAME[21]} ${NODE_TAG[10]}\", type: anytls, server: ${SERVER_IP}, port: $PORT_ANYTLS, password: ${UUID[21]}, client-fingerprint: ${FINGER_PRINT}, udp: true, idle-session-check-interval: 30, idle-session-timeout: 30, sni: ${TLS_SERVER}, skip-cert-verify: false${CLASH_FP} }" &&
   local CLASH_SUBSCRIBE+="
   $CLASH_ANYTLS
 "
@@ -5414,18 +5384,17 @@ export_list() {
 
   # 生成 ShadowRocket 订阅配置文件
   [ -n "$PORT_XTLS_REALITY" ] && local SHADOWROCKET_SUBSCRIBE+="
-vless://$(echo -n "auto:${UUID[11]}@${SERVER_IP_2}:${PORT_XTLS_REALITY}" | base64 -w0)?remarks=${NODE_NAME[11]// /%20}%20${NODE_TAG[0]}&tls=1&peer=${TLS_SERVER}&${VISION_OR_MUX_SHADOWROCKET}&pbk=${REALITY_PUBLIC[11]}
+vless://$(echo -n "auto:${UUID[11]}@${SERVER_IP_2}:${PORT_XTLS_REALITY}" | base64 -w0)?remarks=${NODE_NAME[11]// /%20}%20${NODE_TAG[0]}&tls=1&peer=addons.mozilla.org&${VISION_OR_MUX_SHADOWROCKET}&pbk=${REALITY_PUBLIC[11]}
 "
   if [ -n "$PORT_HYSTERIA2" ]; then
-    local SHADOWROCKET_PARAMS="peer=${TLS_SERVER}&hpkp=${SELF_SIGNED_FINGERPRINT_SHA256}&obfs=none"
-    [ "$IS_HY2_IGNORE" != 'is_hy2_ignore' ] && SHADOWROCKET_PARAMS+="&upmbps=${HY2_UP}&downmbps=${HY2_DOWN}"
+    local SHADOWROCKET_PARAMS="peer=${TLS_SERVER}${SHADOWROCKET_HPKP}&obfs=none&upmbps=${HY2_UP}&downmbps=${HY2_DOWN}"
     [[ -n "$PORT_HOPPING_START" && -n "$PORT_HOPPING_END" ]] && SHADOWROCKET_PARAMS+="&keepalive=30&mport=${PORT_HYSTERIA2},${PORT_HOPPING_START}-${PORT_HOPPING_END}"
     local SHADOWROCKET_SUBSCRIBE+="
 hysteria2://${UUID[12]}@${SERVER_IP_1}:${PORT_HYSTERIA2}?${SHADOWROCKET_PARAMS}#${NODE_NAME[12]// /%20}%20${NODE_TAG[1]}
 "
   fi
   [ -n "$PORT_TUIC" ] && local SHADOWROCKET_SUBSCRIBE+="
-tuic://${TUIC_PASSWORD}:${UUID[13]}@${SERVER_IP_2}:${PORT_TUIC}?peer=${TLS_SERVER}&congestion_control=$TUIC_CONGESTION_CONTROL&udp_relay_mode=native&alpn=h3&hpkp=${SELF_SIGNED_FINGERPRINT_SHA256}#${NODE_NAME[13]// /%20}%20${NODE_TAG[2]}
+tuic://${TUIC_PASSWORD}:${UUID[13]}@${SERVER_IP_2}:${PORT_TUIC}?peer=${TLS_SERVER}&congestion_control=$TUIC_CONGESTION_CONTROL&udp_relay_mode=native&alpn=h3${SHADOWROCKET_HPKP}#${NODE_NAME[13]// /%20}%20${NODE_TAG[2]}
 "
   [ -n "$PORT_SHADOWTLS" ] && local SHADOWROCKET_SUBSCRIBE+="
 ss://$(echo -n "$SHADOWTLS_METHOD:$SHADOWTLS_PASSWORD@${SERVER_IP_2}:${PORT_SHADOWTLS}" | base64 -w0)?shadow-tls=$(echo -n "{\"version\":\"3\",\"host\":\"${TLS_SERVER}\",\"password\":\"${UUID[14]}\"}" | base64 -w0)#${NODE_NAME[14]// /%20}%20${NODE_TAG[3]}
@@ -5434,7 +5403,7 @@ ss://$(echo -n "$SHADOWTLS_METHOD:$SHADOWTLS_PASSWORD@${SERVER_IP_2}:${PORT_SHAD
 ss://$(echo -n "${SHADOWSOCKS_METHOD}:${SHADOWSOCKS_PASSWORD}@${SERVER_IP_2}:$PORT_SHADOWSOCKS" | base64 -w0)#${NODE_NAME[15]// /%20}%20${NODE_TAG[4]}
 "
   [ -n "$PORT_TROJAN" ] && local SHADOWROCKET_SUBSCRIBE+="
-trojan://${TROJAN_PASSWORD}@${SERVER_IP_1}:$PORT_TROJAN?peer=${TLS_SERVER}&hpkp=${SELF_SIGNED_FINGERPRINT_SHA256}#${NODE_NAME[16]// /%20}%20${NODE_TAG[5]}
+trojan://${TROJAN_PASSWORD}@${SERVER_IP_1}:$PORT_TROJAN?peer=${TLS_SERVER}${SHADOWROCKET_HPKP}#${NODE_NAME[16]// /%20}%20${NODE_TAG[5]}
 "
   if [ -n "$PORT_VMESS_WS" ]; then
     local VMESS_CDN_PORT=${CDN_PORT[17]:-80}
@@ -5480,41 +5449,38 @@ vless://$(echo -n "auto:${UUID[18]}@${VLESS_CDN_HOST}:${VLESS_CDN_PORT}" | base6
 
   [ -n "$PORT_H2_REALITY" ] && local SHADOWROCKET_SUBSCRIBE+="
 ----------------------------
-vless://$(echo -n auto:${UUID[19]}@${SERVER_IP_2}:${PORT_H2_REALITY} | base64 -w0)?remarks=${NODE_NAME[19]// /%20}%20${NODE_TAG[8]}&path=/&obfs=h2&tls=1&peer=${TLS_SERVER}&alpn=h2&mux=1&pbk=${REALITY_PUBLIC[19]}
+vless://$(echo -n auto:${UUID[19]}@${SERVER_IP_2}:${PORT_H2_REALITY} | base64 -w0)?remarks=${NODE_NAME[19]// /%20}%20${NODE_TAG[8]}&path=/&obfs=h2&tls=1&peer=addons.mozilla.org&alpn=h2&mux=1&pbk=${REALITY_PUBLIC[19]}
 "
   [ -n "$PORT_GRPC_REALITY" ] && local SHADOWROCKET_SUBSCRIBE+="
-vless://$(echo -n "auto:${UUID[20]}@${SERVER_IP_2}:${PORT_GRPC_REALITY}" | base64 -w0)?remarks=${NODE_NAME[20]// /%20}%20${NODE_TAG[9]}&path=grpc&obfs=grpc&tls=1&peer=${TLS_SERVER}&pbk=${REALITY_PUBLIC[20]}
+vless://$(echo -n "auto:${UUID[20]}@${SERVER_IP_2}:${PORT_GRPC_REALITY}" | base64 -w0)?remarks=${NODE_NAME[20]// /%20}%20${NODE_TAG[9]}&path=grpc&obfs=grpc&tls=1&peer=addons.mozilla.org&pbk=${REALITY_PUBLIC[20]}
 "
   [ -n "$PORT_ANYTLS" ] && local SHADOWROCKET_SUBSCRIBE+="
-anytls://${UUID[21]}@${SERVER_IP_1}:${PORT_ANYTLS}?peer=${TLS_SERVER}&udp=1&hpkp=${SELF_SIGNED_FINGERPRINT_SHA256}#${NODE_NAME[21]// /%20}%20${NODE_TAG[10]}
+anytls://${UUID[21]}@${SERVER_IP_1}:${PORT_ANYTLS}?peer=${TLS_SERVER}&udp=1${SHADOWROCKET_HPKP}#${NODE_NAME[21]// /%20}%20${NODE_TAG[10]}
 "
   [ -n "$PORT_NAIVE" ] && local SHADOWROCKET_SUBSCRIBE+="
-http2://$(echo -n "${UUID[22]}:${UUID[22]}@${SERVER_IP_2}:${PORT_NAIVE}" | base64 -w0)?peer=${TLS_SERVER}&alpn=h2,http/1.1&padding=1&uot=2&hpkp=${SELF_SIGNED_200_FINGERPRINT_SHA256}#${NODE_NAME[22]// /%20}%20${NODE_TAG[11]}%20http2
+http2://$(echo -n "${UUID[22]}:${UUID[22]}@${SERVER_IP_2}:${PORT_NAIVE}" | base64 -w0)?peer=${TLS_SERVER}&alpn=h2,http/1.1&padding=1&uot=2${SHADOWROCKET_HPKP_200}#${NODE_NAME[22]// /%20}%20${NODE_TAG[11]}%20http2
 
-http3://$(echo -n "${UUID[22]}:${UUID[22]}@${SERVER_IP_2}:${PORT_NAIVE}" | base64 -w0)?peer=${TLS_SERVER}&alpn=h3&padding=1&hpkp=${SELF_SIGNED_200_FINGERPRINT_SHA256}#${NODE_NAME[22]// /%20}%20${NODE_TAG[11]}%20http3
+http3://$(echo -n "${UUID[22]}:${UUID[22]}@${SERVER_IP_2}:${PORT_NAIVE}" | base64 -w0)?peer=${TLS_SERVER}&alpn=h3&padding=1${SHADOWROCKET_HPKP_200}#${NODE_NAME[22]// /%20}%20${NODE_TAG[11]}%20http3
 "
   echo -n "$SHADOWROCKET_SUBSCRIBE" | sed -E '/^[ ]*#|^--/d' | sed '/^$/d' | base64 -w0 > ${WORK_DIR}/subscribe/shadowrocket
 
   # 生成 V2rayN 订阅文件
   [ -n "$PORT_XTLS_REALITY" ] && local V2RAYN_SUBSCRIBE+="
 ----------------------------
-vless://${UUID[11]}@${SERVER_IP_1}:${PORT_XTLS_REALITY}?encryption=none${VISION_FLOW}&security=reality&sni=${TLS_SERVER}&fp=${FINGER_PRINT}&pbk=${REALITY_PUBLIC[11]}&type=tcp&headerType=none#${NODE_NAME[11]// /%20}%20${NODE_TAG[0]}"
+vless://${UUID[11]}@${SERVER_IP_1}:${PORT_XTLS_REALITY}?encryption=none${VISION_FLOW}&security=reality&sni=addons.mozilla.org&fp=${FINGER_PRINT}&pbk=${REALITY_PUBLIC[11]}&type=tcp&headerType=none#${NODE_NAME[11]// /%20}%20${NODE_TAG[0]}"
 
   if [ -n "$PORT_HYSTERIA2" ]; then
-    # 各可选项统一以逗号结尾拼接，最后去除多余尾逗号，避免 BBR 模式下产生空字段/孤立逗号
-    local V2RAYN_HY2_EXTRA=""
-    [ "$IS_HY2_REALM" = 'is_hy2_realm' ] && V2RAYN_HY2_EXTRA+="\"Hy2RealmUrl\":\"realm://public@realm.hy2.io:443/${UUID[12]}?stun=stun.nextcloud.com:3478&stun=stun.sip.us:3478&stun=turn.cloudflare.com:3478&stun=global.stun.twilio.com:3478\","
-    [ "$IS_HY2_IGNORE" != 'is_hy2_ignore' ] && V2RAYN_HY2_EXTRA+="\"UpMbps\":${HY2_UP:-200},\"DownMbps\":${HY2_DOWN:-1000},"
-    [[ -n "$PORT_HOPPING_START" && -n "$PORT_HOPPING_END" ]] && V2RAYN_HY2_EXTRA+="\"Ports\":\"${PORT_HOPPING_START}-${PORT_HOPPING_END}\",\"HopInterval\":\"30s\","
-    V2RAYN_HY2_EXTRA=${V2RAYN_HY2_EXTRA%,}
+    [[ -n "$PORT_HOPPING_START" && -n "$PORT_HOPPING_END" ]] && local HOPPING_PARAMS=",\"Ports\":\"${PORT_HOPPING_START}-${PORT_HOPPING_END}\",\"HopInterval\":\"30s\""
+    local REALM_PARAMS=""
+    [ "$IS_HY2_REALM" = 'is_hy2_realm' ] && REALM_PARAMS="\"Hy2RealmUrl\":\"realm://public@realm.hy2.io:443/${UUID[12]}?stun=stun.nextcloud.com:3478&stun=stun.sip.us:3478&stun=turn.cloudflare.com:3478&stun=global.stun.twilio.com:3478\","
     local V2RAYN_SUBSCRIBE+="
 ----------------------------
-v2rayn://hysteria2/$(echo -n "{\"ConfigType\":7,\"ConfigVersion\":4,\"Remarks\":\"${NODE_NAME[12]} ${NODE_TAG[1]}\",\"Address\":\"${SERVER_IP}\",\"Port\":${PORT_HYSTERIA2},\"Password\":\"${UUID[12]}\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${TLS_SERVER}\",\"Cert\":\"${CERT_URL_2}\",\"ProtoExtraObj\":{${V2RAYN_HY2_EXTRA}}}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
+v2rayn://hysteria2/$(echo -n "{\"ConfigType\":7,\"ConfigVersion\":4,\"Remarks\":\"${NODE_NAME[12]} ${NODE_TAG[1]}\",\"Address\":\"${SERVER_IP}\",\"Port\":${PORT_HYSTERIA2},\"Password\":\"${UUID[12]}\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${TLS_SERVER}\"${V2RAYN_CERT_JSON},\"ProtoExtraObj\":{"${REALM_PARAMS}"\"UpMbps\":${HY2_UP:-200},\"DownMbps\":${HY2_DOWN:-1000}}}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
   fi
 
   [ -n "$PORT_TUIC" ] && local V2RAYN_SUBSCRIBE+="
 ----------------------------
-v2rayn://tuic/$(echo -n "{\"ConfigType\":8,\"CoreType\":24,\"ConfigVersion\":4,\"Remarks\":\"${NODE_NAME[13]} ${NODE_TAG[2]}\",\"Address\":\"${SERVER_IP}\",\"Port\":${PORT_TUIC},\"Password\":\"${TUIC_PASSWORD}\",\"Username\":\"${UUID[13]}\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${TLS_SERVER}\",\"Alpn\":\"h3\",\"Cert\":\"${CERT_URL_2}\",\"ProtoExtraObj\":{\"CongestionControl\":\"bbr\"}}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
+v2rayn://tuic/$(echo -n "{\"ConfigType\":8,\"CoreType\":24,\"ConfigVersion\":4,\"Remarks\":\"${NODE_NAME[13]} ${NODE_TAG[2]}\",\"Address\":\"${SERVER_IP}\",\"Port\":${PORT_TUIC},\"Password\":\"${TUIC_PASSWORD}\",\"Username\":\"${UUID[13]}\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${TLS_SERVER}\",\"Alpn\":\"h3\"${V2RAYN_CERT_JSON},\"ProtoExtraObj\":{\"CongestionControl\":\"bbr\"}}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
 
   [ -n "$PORT_SHADOWTLS" ] && local V2RAYN_SUBSCRIBE+="
 ----------------------------
@@ -5569,7 +5535,7 @@ ss://$(echo -n "${SHADOWSOCKS_METHOD}:${SHADOWSOCKS_PASSWORD}@${SERVER_IP_1}:$PO
 
   [ -n "$PORT_TROJAN" ] && local V2RAYN_SUBSCRIBE+="
 ----------------------------
-v2rayn://trojan/$(echo -n "{\"ConfigType\":6,\"ConfigVersion\":4,\"Remarks\":\"${NODE_NAME[16]} ${NODE_TAG[5]}\",\"Address\":\"${SERVER_IP}\",\"Port\":${PORT_TROJAN},\"Password\":\"${TROJAN_PASSWORD}\",\"Network\":\"raw\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${TLS_SERVER}\",\"Cert\":\"${CERT_URL_2}\"}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
+v2rayn://trojan/$(echo -n "{\"ConfigType\":6,\"ConfigVersion\":4,\"Remarks\":\"${NODE_NAME[16]} ${NODE_TAG[5]}\",\"Address\":\"${SERVER_IP}\",\"Port\":${PORT_TROJAN},\"Password\":\"${TROJAN_PASSWORD}\",\"Network\":\"raw\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${TLS_SERVER}\"${V2RAYN_CERT_JSON}}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
 
  if [ -n "$PORT_VMESS_WS" ]; then
     local VMESS_CDN_PORT=${CDN_PORT[17]:-80}
@@ -5613,33 +5579,31 @@ vless://${UUID[18]}@${VLESS_CDN_HOST}:${VLESS_CDN_PORT}?encryption=none&security
 
   [ -n "$PORT_H2_REALITY" ] && local V2RAYN_SUBSCRIBE+="
 ----------------------------
-v2rayn://vless/$(echo -n "{\"ConfigType\":5,\"CoreType\":24,\"ConfigVersion\":4,\"Remarks\":\"${NODE_NAME[19]} ${NODE_TAG[8]}\",\"Address\":\"${SERVER_IP}\",\"Port\":${PORT_H2_REALITY},\"Password\":\"${UUID[19]}\",\"Network\":\"raw\",\"StreamSecurity\":\"reality\",\"AllowInsecure\":\"false\",\"Sni\":\"${TLS_SERVER}\",\"Fingerprint\":\"${FINGER_PRINT}\",\"PublicKey\":\"${REALITY_PUBLIC[19]}\"}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
+v2rayn://vless/$(echo -n "{\"ConfigType\":5,\"CoreType\":24,\"ConfigVersion\":4,\"Remarks\":\"${NODE_NAME[19]} ${NODE_TAG[8]}\",\"Address\":\"${SERVER_IP}\",\"Port\":${PORT_H2_REALITY},\"Password\":\"${UUID[19]}\",\"Network\":\"raw\",\"StreamSecurity\":\"reality\",\"AllowInsecure\":\"false\",\"Sni\":\"addons.mozilla.org\",\"Fingerprint\":\"${FINGER_PRINT}\",\"PublicKey\":\"${REALITY_PUBLIC[19]}\"}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
 
   [ -n "$PORT_GRPC_REALITY" ] && local V2RAYN_SUBSCRIBE+="
 ----------------------------
-vless://${UUID[20]}@${SERVER_IP_1}:${PORT_GRPC_REALITY}?encryption=none&security=reality&sni=${TLS_SERVER}&fp=${FINGER_PRINT}&pbk=${REALITY_PUBLIC[20]}&type=grpc&serviceName=grpc&mode=gun#${NODE_NAME[20]// /%20}%20${NODE_TAG[9]}"
+vless://${UUID[20]}@${SERVER_IP_1}:${PORT_GRPC_REALITY}?encryption=none&security=reality&sni=addons.mozilla.org&fp=${FINGER_PRINT}&pbk=${REALITY_PUBLIC[20]}&type=grpc&serviceName=grpc&mode=gun#${NODE_NAME[20]// /%20}%20${NODE_TAG[9]}"
 
   [ -n "$PORT_ANYTLS" ] && local V2RAYN_SUBSCRIBE+="
 ----------------------------
-v2rayn://anytls/$(echo -n "{\"ConfigType\":11,\"CoreType\":24,\"ConfigVersion\":4,\"Remarks\":\"${NODE_NAME[21]} ${NODE_TAG[10]}\",\"Address\":\"${SERVER_IP}\",\"Port\":${PORT_ANYTLS},\"Password\":\"${UUID[21]}\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${TLS_SERVER}\",\"Fingerprint\":\"${FINGER_PRINT}\",\"Cert\":\"${CERT_URL_2}\"}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
+v2rayn://anytls/$(echo -n "{\"ConfigType\":11,\"CoreType\":24,\"ConfigVersion\":4,\"Remarks\":\"${NODE_NAME[21]} ${NODE_TAG[10]}\",\"Address\":\"${SERVER_IP}\",\"Port\":${PORT_ANYTLS},\"Password\":\"${UUID[21]}\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${TLS_SERVER}\",\"Fingerprint\":\"${FINGER_PRINT}\"${V2RAYN_CERT_JSON}}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
 
   [ -n "$PORT_NAIVE" ] && local V2RAYN_SUBSCRIBE+="
 ----------------------------
-v2rayn://naive/$(echo -n "{\"ConfigType\":12,\"CoreType\":24,\"ConfigVersion\":4,\"Remarks\":\"${NODE_NAME[22]} ${NODE_TAG[11]} http2\",\"Address\":\"${SERVER_IP}\",\"Port\":${PORT_NAIVE},\"Password\":\"${UUID[22]}\",\"Username\":\"${UUID[22]}\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${TLS_SERVER}\",\"Cert\":\"${CERT_200_URL_2}\"}" | base64 -w0 | tr '+/' '-_' | tr -d '=')
+v2rayn://naive/$(echo -n "{\"ConfigType\":12,\"CoreType\":24,\"ConfigVersion\":4,\"Remarks\":\"${NODE_NAME[22]} ${NODE_TAG[11]} http2\",\"Address\":\"${NAIVE_SERVER:-$SERVER_IP}\",\"Port\":${PORT_NAIVE},\"Password\":\"${UUID[22]}\",\"Username\":\"${UUID[22]}\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${TLS_SERVER}\"${V2RAYN_CERT_200_JSON}}" | base64 -w0 | tr '+/' '-_' | tr -d '=')
 ----------------------------
-v2rayn://naive/$(echo -n "{\"ConfigType\":12,\"CoreType\":24,\"ConfigVersion\":4,\"Remarks\":\"${NODE_NAME[22]} ${NODE_TAG[11]} quic\",\"Address\":\"${SERVER_IP}\",\"Port\":${PORT_NAIVE},\"Password\":\"${UUID[22]}\",\"Username\":\"${UUID[22]}\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${TLS_SERVER}\",\"Cert\":\"${CERT_200_URL_2}\",\"ProtoExtraObj\":{\"CongestionControl\":\"bbr\",\"NaiveQuic\":true}}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
+v2rayn://naive/$(echo -n "{\"ConfigType\":12,\"CoreType\":24,\"ConfigVersion\":4,\"Remarks\":\"${NODE_NAME[22]} ${NODE_TAG[11]} quic\",\"Address\":\"${NAIVE_SERVER:-$SERVER_IP}\",\"Port\":${PORT_NAIVE},\"Password\":\"${UUID[22]}\",\"Username\":\"${UUID[22]}\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${TLS_SERVER}\"${V2RAYN_CERT_200_JSON},\"ProtoExtraObj\":{\"CongestionControl\":\"bbr\",\"NaiveQuic\":true}}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
 
   echo -n "$V2RAYN_SUBSCRIBE" | sed '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/d' | sed -E '/^[ ]*#|^[ ]+|^\{|^\}/d' | sed '/^$/d' | base64 -w0 > ${WORK_DIR}/subscribe/v2rayn
 
   # 生成 Throne 订阅文件
   [ -n "$PORT_XTLS_REALITY" ] && local THRONE_SUBSCRIBE+="
 ----------------------------
-vless://${UUID[11]}@${SERVER_IP_1}:${PORT_XTLS_REALITY}?security=reality&sni=${TLS_SERVER}&fp=${FINGER_PRINT}&pbk=${REALITY_PUBLIC[11]}&type=tcp${VISION_FLOW}&encryption=none#${NODE_NAME[11]// /%20}%20${NODE_TAG[0]}"
+vless://${UUID[11]}@${SERVER_IP_1}:${PORT_XTLS_REALITY}?security=reality&sni=addons.mozilla.org&fp=${FINGER_PRINT}&pbk=${REALITY_PUBLIC[11]}&type=tcp${VISION_FLOW}&encryption=none#${NODE_NAME[11]// /%20}%20${NODE_TAG[0]}"
 
   if [ -n "$PORT_HYSTERIA2" ]; then
-    local THRONE_PARAMS="allowInsecure=false&alpn&security=tls&sni=${TLS_SERVER}"
-    [ "$IS_HY2_IGNORE" != 'is_hy2_ignore' ] && THRONE_PARAMS+="&upmbps=${HY2_UP}&downmbps=${HY2_DOWN}"
-    THRONE_PARAMS+="&security=tls&tls_certificate=${CERT_URL_1}"
+    local THRONE_PARAMS="allowInsecure=false&alpn&security=tls&sni=${TLS_SERVER}&upmbps=${HY2_UP}&downmbps=${HY2_DOWN}&security=tls${THRONE_CERT}"
     if [[ -n "$PORT_HOPPING_START" && -n "$PORT_HOPPING_END" ]]; then
       THRONE_PARAMS+="&mport=${PORT_HOPPING_START}-${PORT_HOPPING_END}&hop_interval=30s"
     fi
@@ -5650,7 +5614,7 @@ hysteria2://${UUID[12]}@${SERVER_IP_1}:${PORT_HYSTERIA2}?${THRONE_PARAMS}#${NODE
 
   [ -n "$PORT_TUIC" ] && local THRONE_SUBSCRIBE+="
 ----------------------------
-tuic://${TUIC_PASSWORD}:${UUID[13]}@${SERVER_IP_1}:${PORT_TUIC}?congestion_control=$TUIC_CONGESTION_CONTROL&alpn=h3&sni=${TLS_SERVER}&udp_relay_mode=native&allow_insecure=0&security=tls&tls_certificate=${CERT_URL_1}#${NODE_NAME[13]// /%20}%20${NODE_TAG[2]}"
+tuic://${TUIC_PASSWORD}:${UUID[13]}@${SERVER_IP_1}:${PORT_TUIC}?congestion_control=$TUIC_CONGESTION_CONTROL&alpn=h3&sni=${TLS_SERVER}&udp_relay_mode=native&allow_insecure=0&security=tls${THRONE_CERT}#${NODE_NAME[13]// /%20}%20${NODE_TAG[2]}"
   [ -n "$PORT_SHADOWTLS" ] && local THRONE_SUBSCRIBE+="
 ----------------------------
 shadowtls://:${UUID[14]}@${SERVER_IP_1}:${PORT_SHADOWTLS}?version=3&security=tls&sni=${TLS_SERVER}&fp=chrome#1-tls-not-use
@@ -5663,7 +5627,7 @@ ss://$(echo -n "${SHADOWSOCKS_METHOD}:${SHADOWSOCKS_PASSWORD}" | base64 -w0)@${S
 
   [ -n "$PORT_TROJAN" ] && local THRONE_SUBSCRIBE+="
 ----------------------------
-trojan://${TROJAN_PASSWORD}@${SERVER_IP_1}:$PORT_TROJAN?security=tls&sni=${TLS_SERVER}&allowInsecure=0&tls_certificate=${CERT_URL_1}&fp=${FINGER_PRINT}&type=tcp#${NODE_NAME[16]// /%20}%20${NODE_TAG[5]}"
+trojan://${TROJAN_PASSWORD}@${SERVER_IP_1}:$PORT_TROJAN?security=tls&sni=${TLS_SERVER}&allowInsecure=0${THRONE_CERT}&fp=${FINGER_PRINT}&type=tcp#${NODE_NAME[16]// /%20}%20${NODE_TAG[5]}"
 
   if [ -n "$PORT_VMESS_WS" ]; then
      if [[ "${STATUS[1]}" =~ $(text 27)|$(text 28) ]] || [[ "$IS_ARGO" = 'is_argo' && "$NONINTERACTIVE_INSTALL" = 'noninteractive_install' ]]; then
@@ -5705,11 +5669,11 @@ vless://${UUID[18]}@${VLESS_CDN_HOST}:${VLESS_CDN_PORT}?security=tls&sni=$VLESS_
 
   [ -n "$PORT_H2_REALITY" ] && local THRONE_SUBSCRIBE+="
 ----------------------------
-vless://${UUID[19]}@${SERVER_IP_1}:${PORT_H2_REALITY}?security=reality&sni=${TLS_SERVER}&alpn=h2&fp=${FINGER_PRINT}&pbk=${REALITY_PUBLIC[19]// /%20}&type=http&encryption=none#${NODE_NAME[19]// /%20}%20${NODE_TAG[8]}"
+vless://${UUID[19]}@${SERVER_IP_1}:${PORT_H2_REALITY}?security=reality&sni=addons.mozilla.org&alpn=h2&fp=${FINGER_PRINT}&pbk=${REALITY_PUBLIC[19]// /%20}&type=http&encryption=none#${NODE_NAME[19]// /%20}%20${NODE_TAG[8]}"
 
   [ -n "$PORT_GRPC_REALITY" ] && local THRONE_SUBSCRIBE+="
 ----------------------------
-vless://${UUID[20]}@${SERVER_IP_1}:${PORT_GRPC_REALITY}?security=reality&sni=${TLS_SERVER}&fp=${FINGER_PRINT}&pbk=${REALITY_PUBLIC[20]// /%20}&type=grpc&serviceName=grpc&encryption=none#${NODE_NAME[20]// /%20}%20${NODE_TAG[9]}"
+vless://${UUID[20]}@${SERVER_IP_1}:${PORT_GRPC_REALITY}?security=reality&sni=addons.mozilla.org&fp=${FINGER_PRINT}&pbk=${REALITY_PUBLIC[20]// /%20}&type=grpc&serviceName=grpc&encryption=none#${NODE_NAME[20]// /%20}%20${NODE_TAG[9]}"
 
   [ -n "$PORT_ANYTLS" ] && local THRONE_SUBSCRIBE+="
 ----------------------------
@@ -5718,22 +5682,20 @@ anytls://${UUID[21]}@${SERVER_IP_1}:${PORT_ANYTLS}?idle_session_check_interval=3
   [ -n "$PORT_NAIVE" ] && {
     local THRONE_SUBSCRIBE+="
 ----------------------------
-naive+https://${UUID[22]}:${UUID[22]}@${SERVER_IP_1}:${PORT_NAIVE}?uot=1&security=tls&sni=${TLS_SERVER}&tls_certificate=${CERT_200_URL_1}#${NODE_NAME[22]// /%20}%20${NODE_TAG[11]}%20http2
+naive+https://${UUID[22]}:${UUID[22]}@${NAIVE_SERVER:-$SERVER_IP_1}:${PORT_NAIVE}?uot=1&security=tls&sni=${TLS_SERVER}${THRONE_CERT_200}#${NODE_NAME[22]// /%20}%20${NODE_TAG[11]}%20http2
 ----------------------------
-naive+quic://${UUID[22]}:${UUID[22]}@${SERVER_IP_1}:${PORT_NAIVE}?congestion_control=bbr&security=tls&sni=${TLS_SERVER}&tls_certificate=${CERT_200_URL_1}#${NODE_NAME[22]// /%20}%20${NODE_TAG[11]}%20quic"
+naive+quic://${UUID[22]}:${UUID[22]}@${NAIVE_SERVER:-$SERVER_IP_1}:${PORT_NAIVE}?congestion_control=bbr&security=tls&sni=${TLS_SERVER}${THRONE_CERT_200}#${NODE_NAME[22]// /%20}%20${NODE_TAG[11]}%20quic"
   }
 
   echo -n "$THRONE_SUBSCRIBE" | sed -E '/^[ ]*#|^--/d' | sed '/^$/d' | base64 -w0 > ${WORK_DIR}/subscribe/throne
 
   # 生成 Sing-box 订阅文件
   [ -n "$PORT_XTLS_REALITY" ] &&
-  local OUTBOUND_REPLACE+=" { \"type\": \"vless\", \"tag\": \"${NODE_NAME[11]} ${NODE_TAG[0]}\", \"server\":\"${SERVER_IP}\", \"server_port\":${PORT_XTLS_REALITY}, \"uuid\":\"${UUID[11]}\", \"flow\":\"${FLOW}\", \"tls\":{ \"enabled\":true, \"server_name\":\"${TLS_SERVER}\", \"utls\":{ \"enabled\":true, \"fingerprint\":\"${FINGER_PRINT}\" }, \"reality\":{ \"enabled\":true, \"public_key\":\"${REALITY_PUBLIC[11]}\", \"short_id\":\"\" } }, \"multiplex\": { \"enabled\": ${MULTIPLEX_PADDING_ENABLED}, \"protocol\": \"h2mux\", \"max_connections\": 8, \"min_streams\": 16, \"padding\": ${MULTIPLEX_PADDING_ENABLED}, \"brutal\":{ \"enabled\":${VISION_BRUTAL_ENABLED}, \"up_mbps\":1000, \"down_mbps\":1000 } } }," &&
+  local OUTBOUND_REPLACE+=" { \"type\": \"vless\", \"tag\": \"${NODE_NAME[11]} ${NODE_TAG[0]}\", \"server\":\"${SERVER_IP}\", \"server_port\":${PORT_XTLS_REALITY}, \"uuid\":\"${UUID[11]}\", \"flow\":\"${FLOW}\", \"tls\":{ \"enabled\":true, \"server_name\":\"addons.mozilla.org\", \"utls\":{ \"enabled\":true, \"fingerprint\":\"${FINGER_PRINT}\" }, \"reality\":{ \"enabled\":true, \"public_key\":\"${REALITY_PUBLIC[11]}\", \"short_id\":\"\" } }, \"multiplex\": { \"enabled\": ${MULTIPLEX_PADDING_ENABLED}, \"protocol\": \"h2mux\", \"max_connections\": 8, \"min_streams\": 16, \"padding\": ${MULTIPLEX_PADDING_ENABLED}, \"brutal\":{ \"enabled\":${VISION_BRUTAL_ENABLED}, \"up_mbps\":1000, \"down_mbps\":1000 } } }," &&
   local NODE_REPLACE+="\"${NODE_NAME[11]} ${NODE_TAG[0]}\","
 
   if [ -n "$PORT_HYSTERIA2" ]; then
-    local HYSTERIA2_CONFIG=" { \"type\": \"hysteria2\", \"tag\": \"${NODE_NAME[12]} ${NODE_TAG[1]}\", \"server\": \"${SERVER_IP}\", \"server_port\": ${PORT_HYSTERIA2},"
-    [ "$IS_HY2_IGNORE" != 'is_hy2_ignore' ] && HYSTERIA2_CONFIG+=" \"up_mbps\": ${HY2_UP}, \"down_mbps\": ${HY2_DOWN},"
-    HYSTERIA2_CONFIG+=" \"password\": \"${UUID[12]}\", \"tls\": { \"enabled\": true, \"server_name\": \"${TLS_SERVER}\", \"certificate_public_key_sha256\": [\"$SELF_SIGNED_FINGERPRINT_BASE64\"], \"alpn\": [ \"h3\" ] }"
+    local HYSTERIA2_CONFIG=" { \"type\": \"hysteria2\", \"tag\": \"${NODE_NAME[12]} ${NODE_TAG[1]}\", \"server\": \"${SERVER_IP}\", \"server_port\": ${PORT_HYSTERIA2}, \"up_mbps\": ${HY2_UP}, \"down_mbps\": ${HY2_DOWN}, \"password\": \"${UUID[12]}\", \"tls\": { \"enabled\": true, \"server_name\": \"${TLS_SERVER}\", ${CERT_PINNING_JSON} \"alpn\": [ \"h3\" ] }"
     if [ "$IS_HY2_REALM" = 'is_hy2_realm' ]; then
       HY2_REALM_ID="${HY2_REALM_ID:-${UUID[12]}}"
       HYSTERIA2_CONFIG+=", \"realm\": { \"server_url\": \"https://realm.hy2.io\", \"token\": \"public\", \"realm_id\": \"${HY2_REALM_ID}\", \"stun_servers\": [ \"turn.cloudflare.com:3478\", \"stun.nextcloud.com:3478\", \"stun.sip.us:3478\", \"global.stun.twilio.com:3478\" ] }"
@@ -5747,7 +5709,7 @@ naive+quic://${UUID[22]}:${UUID[22]}@${SERVER_IP_1}:${PORT_NAIVE}?congestion_con
   fi
 
   [ -n "$PORT_TUIC" ] &&
-  local TUIC_INBOUND=" { \"type\": \"tuic\", \"tag\": \"${NODE_NAME[13]} ${NODE_TAG[2]}\", \"server\": \"${SERVER_IP}\", \"server_port\": ${PORT_TUIC}, \"uuid\": \"${UUID[13]}\", \"password\": \"${TUIC_PASSWORD}\", \"congestion_control\": \"$TUIC_CONGESTION_CONTROL\", \"udp_relay_mode\": \"native\", \"zero_rtt_handshake\": false, \"heartbeat\": \"10s\", \"tls\": { \"enabled\": true, \"server_name\": \"${TLS_SERVER}\", \"certificate_public_key_sha256\": [\"$SELF_SIGNED_FINGERPRINT_BASE64\"], \"alpn\": [ \"h3\" ] } }," &&
+  local TUIC_INBOUND=" { \"type\": \"tuic\", \"tag\": \"${NODE_NAME[13]} ${NODE_TAG[2]}\", \"server\": \"${SERVER_IP}\", \"server_port\": ${PORT_TUIC}, \"uuid\": \"${UUID[13]}\", \"password\": \"${TUIC_PASSWORD}\", \"congestion_control\": \"$TUIC_CONGESTION_CONTROL\", \"udp_relay_mode\": \"native\", \"zero_rtt_handshake\": false, \"heartbeat\": \"10s\", \"tls\": { \"enabled\": true, \"server_name\": \"${TLS_SERVER}\", ${CERT_PINNING_JSON} \"alpn\": [ \"h3\" ] } }," &&
   local OUTBOUND_REPLACE+="${TUIC_INBOUND}" &&
   local NODE_REPLACE+="\"${NODE_NAME[13]} ${NODE_TAG[2]}\","
 
@@ -5761,7 +5723,7 @@ naive+quic://${UUID[22]}:${UUID[22]}@${SERVER_IP_1}:${PORT_NAIVE}?congestion_con
   local NODE_REPLACE+="\"${NODE_NAME[15]} ${NODE_TAG[4]}\","
 
   [ -n "$PORT_TROJAN" ] &&
-  local OUTBOUND_REPLACE+=" { \"type\": \"trojan\", \"tag\": \"${NODE_NAME[16]} ${NODE_TAG[5]}\", \"server\": \"${SERVER_IP}\", \"server_port\": $PORT_TROJAN, \"password\": \"$TROJAN_PASSWORD\", \"tls\": { \"enabled\": true, \"certificate_public_key_sha256\": [\"$SELF_SIGNED_FINGERPRINT_BASE64\"], \"server_name\":\"${TLS_SERVER}\", \"utls\": { \"enabled\":true, \"fingerprint\":\"${FINGER_PRINT}\" } }, \"multiplex\": { \"enabled\":true, \"protocol\":\"h2mux\", \"max_connections\": 8, \"min_streams\": 16, \"padding\": true, \"brutal\":{ \"enabled\":${IS_BRUTAL}, \"up_mbps\":1000, \"down_mbps\":1000 } } }," &&
+  local OUTBOUND_REPLACE+=" { \"type\": \"trojan\", \"tag\": \"${NODE_NAME[16]} ${NODE_TAG[5]}\", \"server\": \"${SERVER_IP}\", \"server_port\": $PORT_TROJAN, \"password\": \"$TROJAN_PASSWORD\", \"tls\": { \"enabled\": true, ${CERT_PINNING_JSON} \"server_name\":\"${TLS_SERVER}\", \"utls\": { \"enabled\":true, \"fingerprint\":\"${FINGER_PRINT}\" } }, \"multiplex\": { \"enabled\":true, \"protocol\":\"h2mux\", \"max_connections\": 8, \"min_streams\": 16, \"padding\": true, \"brutal\":{ \"enabled\":${IS_BRUTAL}, \"up_mbps\":1000, \"down_mbps\":1000 } } }," &&
   local NODE_REPLACE+="\"${NODE_NAME[16]} ${NODE_TAG[5]}\","
 
   if [ -n "$PORT_VMESS_WS" ]; then
@@ -5801,21 +5763,21 @@ naive+quic://${UUID[22]}:${UUID[22]}@${SERVER_IP_1}:${PORT_NAIVE}?congestion_con
   fi
 
   [ -n "$PORT_H2_REALITY" ] &&
-  local REALITY_H2_INBOUND=" { \"type\": \"vless\", \"tag\": \"${NODE_NAME[19]} ${NODE_TAG[8]}\", \"server\": \"${SERVER_IP}\", \"server_port\": ${PORT_H2_REALITY}, \"uuid\":\"${UUID[19]}\", \"tls\": { \"enabled\":true, \"server_name\":\"${TLS_SERVER}\", \"utls\": { \"enabled\":true, \"fingerprint\":\"${FINGER_PRINT}\" }, \"reality\":{ \"enabled\":true, \"public_key\":\"${REALITY_PUBLIC[19]}\", \"short_id\":\"\" } }, \"transport\": { \"type\": \"http\" } }," &&
+  local REALITY_H2_INBOUND=" { \"type\": \"vless\", \"tag\": \"${NODE_NAME[19]} ${NODE_TAG[8]}\", \"server\": \"${SERVER_IP}\", \"server_port\": ${PORT_H2_REALITY}, \"uuid\":\"${UUID[19]}\", \"tls\": { \"enabled\":true, \"server_name\":\"addons.mozilla.org\", \"utls\": { \"enabled\":true, \"fingerprint\":\"${FINGER_PRINT}\" }, \"reality\":{ \"enabled\":true, \"public_key\":\"${REALITY_PUBLIC[19]}\", \"short_id\":\"\" } }, \"transport\": { \"type\": \"http\" } }," &&
   local REALITY_H2_NODE="\"${NODE_NAME[19]} ${NODE_TAG[8]}\"" &&
   local NODE_REPLACE+="${REALITY_H2_NODE}," &&
   local OUTBOUND_REPLACE+=" ${REALITY_H2_INBOUND}"
 
   [ -n "$PORT_GRPC_REALITY" ] &&
-  local OUTBOUND_REPLACE+=" { \"type\": \"vless\", \"tag\": \"${NODE_NAME[20]} ${NODE_TAG[9]}\", \"server\": \"${SERVER_IP}\", \"server_port\": ${PORT_GRPC_REALITY}, \"uuid\":\"${UUID[20]}\", \"tls\": { \"enabled\":true, \"server_name\":\"${TLS_SERVER}\", \"utls\": { \"enabled\":true, \"fingerprint\":\"${FINGER_PRINT}\" }, \"reality\":{ \"enabled\":true, \"public_key\":\"${REALITY_PUBLIC[20]}\", \"short_id\":\"\" } }, \"transport\": { \"type\": \"grpc\", \"service_name\": \"grpc\" } }," &&
+  local OUTBOUND_REPLACE+=" { \"type\": \"vless\", \"tag\": \"${NODE_NAME[20]} ${NODE_TAG[9]}\", \"server\": \"${SERVER_IP}\", \"server_port\": ${PORT_GRPC_REALITY}, \"uuid\":\"${UUID[20]}\", \"tls\": { \"enabled\":true, \"server_name\":\"addons.mozilla.org\", \"utls\": { \"enabled\":true, \"fingerprint\":\"${FINGER_PRINT}\" }, \"reality\":{ \"enabled\":true, \"public_key\":\"${REALITY_PUBLIC[20]}\", \"short_id\":\"\" } }, \"transport\": { \"type\": \"grpc\", \"service_name\": \"grpc\" } }," &&
   local NODE_REPLACE+="\"${NODE_NAME[20]} ${NODE_TAG[9]}\","
 
   [ -n "$PORT_ANYTLS" ] &&
-  local OUTBOUND_REPLACE+=" { \"type\": \"anytls\", \"tag\": \"${NODE_NAME[21]} ${NODE_TAG[10]}\", \"server\": \"${SERVER_IP}\", \"server_port\": ${PORT_ANYTLS}, \"password\": \"${UUID[21]}\", \"idle_session_check_interval\": \"30s\", \"idle_session_timeout\": \"30s\", \"min_idle_session\": 5, \"tls\": { \"enabled\": true, \"certificate_public_key_sha256\": [\"$SELF_SIGNED_FINGERPRINT_BASE64\"], \"server_name\": \"${TLS_SERVER}\", \"utls\": { \"enabled\": true, \"fingerprint\": \"${FINGER_PRINT}\" } } }," &&
+  local OUTBOUND_REPLACE+=" { \"type\": \"anytls\", \"tag\": \"${NODE_NAME[21]} ${NODE_TAG[10]}\", \"server\": \"${SERVER_IP}\", \"server_port\": ${PORT_ANYTLS}, \"password\": \"${UUID[21]}\", \"idle_session_check_interval\": \"30s\", \"idle_session_timeout\": \"30s\", \"min_idle_session\": 5, \"tls\": { \"enabled\": true, ${CERT_PINNING_JSON} \"server_name\": \"${TLS_SERVER}\", \"utls\": { \"enabled\": true, \"fingerprint\": \"${FINGER_PRINT}\" } } }," &&
   local NODE_REPLACE+="\"${NODE_NAME[21]} ${NODE_TAG[10]}\","
 
   [ -n "$PORT_NAIVE" ] &&
-  local OUTBOUND_REPLACE+=" { \"type\": \"naive\", \"tag\": \"${NODE_NAME[22]} ${NODE_TAG[11]} http2\", \"server\": \"${SERVER_IP}\", \"server_port\": ${PORT_NAIVE}, \"username\": \"${UUID[22]}\", \"password\": \"${UUID[22]}\", \"udp_over_tcp\": true, \"quic\": false, \"tls\": { \"enabled\": true, \"certificate\": [$(tr -d '\n' <<< "$CERT200_JSON")], \"server_name\": \"${TLS_SERVER}\" } }, { \"type\": \"naive\", \"tag\": \"${NODE_NAME[22]} ${NODE_TAG[11]} quic\", \"server\": \"${SERVER_IP}\", \"server_port\": ${PORT_NAIVE}, \"username\": \"${UUID[22]}\", \"password\": \"${UUID[22]}\", \"udp_over_tcp\": false, \"quic\": true, \"quic_congestion_control\": \"bbr\", \"tls\": { \"enabled\": true, \"certificate\": [$(tr -d '\n' <<< "$CERT200_JSON")], \"server_name\": \"${TLS_SERVER}\" } }," &&
+  local OUTBOUND_REPLACE+=" { \"type\": \"naive\", \"tag\": \"${NODE_NAME[22]} ${NODE_TAG[11]} http2\", \"server\": \"${NAIVE_SERVER:-$SERVER_IP}\", \"server_port\": ${PORT_NAIVE}, \"username\": \"${UUID[22]}\", \"password\": \"${UUID[22]}\", \"udp_over_tcp\": true, \"quic\": false, \"tls\": { \"enabled\": true, ${NAIVE_CERT_JSON}\"server_name\": \"${TLS_SERVER}\" } }, { \"type\": \"naive\", \"tag\": \"${NODE_NAME[22]} ${NODE_TAG[11]} quic\", \"server\": \"${NAIVE_SERVER:-$SERVER_IP}\", \"server_port\": ${PORT_NAIVE}, \"username\": \"${UUID[22]}\", \"password\": \"${UUID[22]}\", \"udp_over_tcp\": false, \"quic\": true, \"quic_congestion_control\": \"bbr\", \"tls\": { \"enabled\": true, ${NAIVE_CERT_JSON}\"server_name\": \"${TLS_SERVER}\" } }," &&
   local NODE_REPLACE+="\"${NODE_NAME[22]} ${NODE_TAG[11]} http2\",\"${NODE_NAME[22]} ${NODE_TAG[11]} quic\","
 
   {
@@ -5981,10 +5943,15 @@ $(hint "⬆ Outbound (total):  $(format_traffic $OUT_SUM)")
 
 # 创建快捷方式
 create_shortcut() {
-  cat > ${WORK_DIR}/sb.sh << EOF
+  cat > ${WORK_DIR}/sb.sh << 'EOF'
 #!/usr/bin/env bash
-
-bash <(wget --no-check-certificate -qO- https://raw.githubusercontent.com/fscarmen/sing-box/main/sing-box.sh) \$@
+SCRIPT_CONTENT=$(wget -T 10 -t 2 --no-check-certificate -qO- https://raw.githubusercontent.com/Miracufe/sing-box/main/sing-box.sh)
+if [ -n "$SCRIPT_CONTENT" ]; then
+  bash <(printf '%s\n' "$SCRIPT_CONTENT") "$@"
+else
+  echo -e "\033[31mError: Failed to fetch the sing-box.sh script from GitHub.\033[0m"
+  echo -e "Please check if the URL 'https://raw.githubusercontent.com/Miracufe/sing-box/main/sing-box.sh' is accessible."
+fi
 EOF
   chmod +x ${WORK_DIR}/sb.sh
   ln -sf ${WORK_DIR}/sb.sh /usr/bin/sb
@@ -6475,6 +6442,282 @@ version() {
   fi
 }
 
+# 申请与管理 Let's Encrypt 证书菜单
+manage_acme_certificate_menu() {
+  clear
+  echo -e "======================================================"
+  if [ "$L" = "C" ]; then
+    echo -e "         Let's Encrypt 证书自动管理工具"
+    echo -e "======================================================"
+    echo -e "1. 申请并安装 Let's Encrypt 证书（自动续期 + 自动生效）"
+    echo -e "2. 强制手动更新/续期证书"
+    echo -e "3. 查看当前证书详情与到期时间"
+    echo -e "4. 回退并恢复使用系统自签证书"
+    echo -e "0. 返回主菜单"
+    echo -e "======================================================"
+    reading " 请输入选项: " CERT_CHOOSE
+  else
+    echo -e "       Let's Encrypt Certificate Management Tool"
+    echo -e "======================================================"
+    echo -e "1. Apply & Install Let's Encrypt Cert (Auto Renew + Auto Restart)"
+    echo -e "2. Force Manual Renew Cert"
+    echo -e "3. View Current Cert Details & Expiration"
+    echo -e "4. Revert and use system self-signed certificates"
+    echo -e "0. Back to Main Menu"
+    echo -e "======================================================"
+    reading " Please enter your choice: " CERT_CHOOSE
+  fi
+
+  case "$CERT_CHOOSE" in
+    1)
+      if [ "$L" = "C" ]; then
+        reading " 请输入你要申请证书的域名 (例如: example.com): " CERT_DOMAIN
+      else
+        reading " Please enter the domain name for the cert (e.g. example.com): " CERT_DOMAIN
+      fi
+
+      if [[ -z "$CERT_DOMAIN" ]]; then
+        [ "$L" = "C" ] && warning "域名不能为空！" || warning "Domain cannot be empty!"
+        sleep 2
+        manage_acme_certificate_menu
+        return
+      fi
+
+      # 验证解析
+      [ "$L" = "C" ] && info "开始检查域名解析..." || info "Checking domain DNS resolution..."
+      local RESOLVED_IP=$(ping -c 1 -4 "$CERT_DOMAIN" 2>/dev/null | awk -F '[()]' '/PING/{print $2}')
+      [ -z "$RESOLVED_IP" ] && RESOLVED_IP=$(nslookup "$CERT_DOMAIN" 2>/dev/null | awk '/Address: / {print $2}' | tail -n 1)
+
+      # 选择申请验证方式
+      local ACME_MODE=""
+      if [ "$L" = "C" ]; then
+        echo -e "请选择证书申请验证方式 / Choose validation method:"
+        echo -e "1. HTTP-01 验证 (独立 80 端口模式，需临时停用 80 端口服务)"
+        echo -e "2. DNS-01 验证 (Cloudflare DNS API 模式，免占用 80 端口/免停机)"
+        reading " 请选择 [1-2] (默认 1): " ACME_MODE
+      else
+        echo -e "Please choose certificate validation method:"
+        echo -e "1. HTTP-01 Validation (Standalone Port 80, requires temporary downtime)"
+        echo -e "2. DNS-01 Validation (Cloudflare DNS API, zero-downtime)"
+        reading " Please choose [1-2] (default 1): " ACME_MODE
+      fi
+      ACME_MODE=${ACME_MODE:-1}
+
+      if [ "$ACME_MODE" = "1" ]; then
+        # HTTP-01 的域名解析检查（不可省）
+        if [ -z "$RESOLVED_IP" ]; then
+          [ "$L" = "C" ] && warning "域名 $CERT_DOMAIN 无法解析，请确保已添加 DNS 解析！" || warning "Domain $CERT_DOMAIN cannot be resolved. Please make sure DNS is configured!"
+          sleep 3
+          manage_acme_certificate_menu
+          return
+        fi
+        [ "$L" = "C" ] && info "检测到域名解析到 IP: $RESOLVED_IP" || info "Detected domain resolves to IP: $RESOLVED_IP"
+      fi
+
+      # 安装依赖
+      if command -v apt-get >/dev/null 2>&1; then
+        apt-get update -y && apt-get install -y socat curl >/dev/null 2>&1
+      elif command -v yum >/dev/null 2>&1; then
+        yum install -y socat curl >/dev/null 2>&1
+      fi
+
+      # 安装 acme.sh
+      if [ ! -d "/root/.acme.sh" ]; then
+        curl https://get.acme.sh | sh -s email=my_singbox_acme@gmail.com >/dev/null 2>&1
+      fi
+
+      if [ -x "/root/.acme.sh/acme.sh" ]; then
+        # 注册 ACME 账户，设置默认 CA 为 Let's Encrypt
+        /root/.acme.sh/acme.sh --register-account -m my_singbox_acme@gmail.com --server letsencrypt >/dev/null 2>&1
+        /root/.acme.sh/acme.sh --set-default-ca --server letsencrypt >/dev/null 2>&1
+
+        if [ "$ACME_MODE" = "1" ]; then
+          # 临时停止占用 80 端口的服务
+          systemctl stop nginx >/dev/null 2>&1 || true
+          systemctl stop caddy >/dev/null 2>&1 || true
+          systemctl stop sing-box >/dev/null 2>&1 || true
+
+          # 申请证书 (HTTP-01, standalone 且配置自动续签 pre-hook / post-hook)
+          /root/.acme.sh/acme.sh --issue -d "$CERT_DOMAIN" --standalone --keylength ec-256 --force \
+            --pre-hook "systemctl stop nginx caddy sing-box" \
+            --post-hook "systemctl start nginx caddy sing-box"
+        else
+          # DNS-01 Mode, 收集 credentials
+          local CF_CRED_CHOOSE=""
+          local CF_TOKEN_INPUT=""
+          local CF_KEY_INPUT=""
+          local CF_EMAIL_INPUT=""
+          if [ "$L" = "C" ]; then
+            echo -e "请选择 Cloudflare 凭据类型:"
+            echo -e "1. 使用 API Token (推荐)"
+            echo -e "2. 使用 Global API Key"
+            reading " 请选择 [1-2] (默认 1): " CF_CRED_CHOOSE
+          else
+            echo -e "Choose Cloudflare credentials type:"
+            echo -e "1. Use API Token (Recommended)"
+            echo -e "2. Use Global API Key"
+            reading " Please choose [1-2] (default 1): " CF_CRED_CHOOSE
+          fi
+          CF_CRED_CHOOSE=${CF_CRED_CHOOSE:-1}
+
+          if [ "$CF_CRED_CHOOSE" = "1" ]; then
+            if [ "$L" = "C" ]; then
+              reading " 请输入 Cloudflare API Token: " CF_TOKEN_INPUT
+            else
+              reading " Please enter Cloudflare API Token: " CF_TOKEN_INPUT
+            fi
+            if [ -z "$CF_TOKEN_INPUT" ]; then
+              [ "$L" = "C" ] && warning "Token 不能为空！" || warning "Token cannot be empty!"
+              sleep 2
+              manage_acme_certificate_menu
+              return
+            fi
+            export CF_Token="$CF_TOKEN_INPUT"
+            unset CF_Key
+            unset CF_Email
+          else
+            if [ "$L" = "C" ]; then
+              reading " 请输入 Cloudflare 账户 Email: " CF_EMAIL_INPUT
+              reading " 请输入 Cloudflare Global API Key: " CF_KEY_INPUT
+            else
+              reading " Please enter Cloudflare Email: " CF_EMAIL_INPUT
+              reading " Please enter Cloudflare Global API Key: " CF_KEY_INPUT
+            fi
+            if [ -z "$CF_EMAIL_INPUT" ] || [ -z "$CF_KEY_INPUT" ]; then
+              [ "$L" = "C" ] && warning "Email 或 Key 不能为空！" || warning "Email or Key cannot be empty!"
+              sleep 2
+              manage_acme_certificate_menu
+              return
+            fi
+            export CF_Email="$CF_EMAIL_INPUT"
+            export CF_Key="$CF_KEY_INPUT"
+            unset CF_Token
+          fi
+
+          # 申请证书 (DNS-01 CF 验证)
+          /root/.acme.sh/acme.sh --issue --dns dns_cf -d "$CERT_DOMAIN" --keylength ec-256 --force
+        fi
+
+        # 检查并安装证书
+        if [ -s "/root/.acme.sh/${CERT_DOMAIN}_ecc/${CERT_DOMAIN}.key" ] && [ -s "/root/.acme.sh/${CERT_DOMAIN}_ecc/fullchain.cer" ]; then
+          [ ! -d ${WORK_DIR}/cert ] && mkdir -p ${WORK_DIR}/cert
+
+          # 通过 acme.sh 官方命令进行安装，设置自动续期 reloadcmd，续期后自动重启 sing-box
+          /root/.acme.sh/acme.sh --install-cert -d "$CERT_DOMAIN" --ecc \
+            --key-file "${WORK_DIR}/cert/private.key" \
+            --fullchain-file "${WORK_DIR}/cert/cert.pem" \
+            --reloadcmd "cp ${WORK_DIR}/cert/cert.pem ${WORK_DIR}/cert/cert_200.pem && systemctl restart sing-box && (systemctl reload nginx || true)"
+
+          # 拷贝一份给 NaiveProxy 使用
+          cp "${WORK_DIR}/cert/cert.pem" "${WORK_DIR}/cert/cert_200.pem"
+
+          # 自动修正现有 inbound 配置文件中的域名 (排除 argo 隧道相关的 vmess-ws 和 vless-ws-tls)
+          for FILE in ${WORK_DIR}/conf/*_inbounds.json; do
+            if [[ "$FILE" =~ "vless-ws-tls" ]]; then
+              continue
+            fi
+            if [ -s "$FILE" ] && grep -q 'certificate_path' "$FILE"; then
+              sed -i "s/\"server_name\":.*/\"server_name\":\"$CERT_DOMAIN\",/g" "$FILE"
+            fi
+          done
+
+          [ "$L" = "C" ] && info "Let's Encrypt 证书申请与安装成功！已配置每日自动检查与续期。" || info "Let's Encrypt certificate applied & installed successfully! Auto-renew and restart scheduled."
+        else
+          if [ "$ACME_MODE" = "1" ]; then
+            [ "$L" = "C" ] && error "证书申请失败，请检查服务器 80 端口是否放行，且未被占用！" || error "Certificate application failed. Check if port 80 is open and not in use!"
+          else
+            [ "$L" = "C" ] && error "证书申请失败，请检查 Cloudflare Token/Key 是否正确，且域名解析是否在 CF 托管！" || error "Certificate application failed. Check if Cloudflare Token/Key is correct and domain is managed by CF!"
+          fi
+        fi
+
+        # 恢复服务 (仅 HTTP-01 模式需要手动拉起，DNS 模式下无需拉起，因为没有停止过)
+        if [ "$ACME_MODE" = "1" ]; then
+          systemctl start nginx >/dev/null 2>&1 || true
+          systemctl start caddy >/dev/null 2>&1 || true
+          systemctl start sing-box >/dev/null 2>&1 || true
+        fi
+      else
+        [ "$L" = "C" ] && error "未找到 acme.sh，安装失败！" || error "acme.sh not found, installation failed!"
+      fi
+      sleep 4
+      manage_acme_certificate_menu
+      ;;
+    2)
+      # 强制手动更新所有证书
+      if [ -d "/root/.acme.sh" ] && [ -x "/root/.acme.sh/acme.sh" ]; then
+        [ "$L" = "C" ] && info "正在强制更新所有已安装的证书..." || info "Force renewing all installed certificates..."
+        /root/.acme.sh/acme.sh --cron --force
+        [ "$L" = "C" ] && info "更新检查完毕！" || info "Renew check finished!"
+      else
+        [ "$L" = "C" ] && warning "未安装 acme.sh，请先选择选项 1 申请并安装证书。" || warning "acme.sh is not installed. Please choose Option 1 first."
+      fi
+      sleep 3
+      manage_acme_certificate_menu
+      ;;
+    3)
+      # 查看证书状态
+      if [ -s "${WORK_DIR}/cert/cert.pem" ]; then
+        [ "$L" = "C" ] && info "--- 当前 Sing-box 正在使用的证书详情 ---" || info "--- Details of certificate currently used by Sing-box ---"
+        openssl x509 -in "${WORK_DIR}/cert/cert.pem" -text -noout | grep -E 'Subject:|Issuer:|Not After|DNS:'
+      else
+        [ "$L" = "C" ] && warning "未找到已安装的证书文件。" || warning "No installed certificate found."
+      fi
+      reading "\n按任意键返回... " TEMP_KEY
+      manage_acme_certificate_menu
+      ;;
+    4)
+      # 回退并恢复使用系统自签证书
+      if [ "$L" = "C" ]; then
+        reading " 是否确认删除 Let's Encrypt 证书并回退到原版自签证书？(y/n): " REVERT_CONFIRM
+      else
+        reading " Are you sure you want to delete Let's Encrypt cert and revert to self-signed? (y/n): " REVERT_CONFIRM
+      fi
+
+      if [[ "${REVERT_CONFIRM,,}" = "y" ]]; then
+        local CURRENT_DOMAIN=$(openssl x509 -noout -ext subjectAltName -in "${WORK_DIR}/cert/cert.pem" 2>/dev/null | awk -F 'DNS:' '/DNS:/{gsub(/,.*/, "", $2); print $2}')
+        
+        [ "$L" = "C" ] && info "正在清理 acme.sh 证书续期计划..." || info "Cleaning up acme.sh cert schedule..."
+        if [ -n "$CURRENT_DOMAIN" ] && [ -x "/root/.acme.sh/acme.sh" ]; then
+          /root/.acme.sh/acme.sh --remove -d "$CURRENT_DOMAIN" --ecc >/dev/null 2>&1 || true
+          if [ -d "/root/.acme.sh/${CURRENT_DOMAIN}_ecc" ]; then
+            rm -rf "/root/.acme.sh/${CURRENT_DOMAIN}_ecc"
+          fi
+        fi
+
+        [ "$L" = "C" ] && info "正在重新生成默认自签证书 (addons.mozilla.org)..." || info "Re-generating default self-signed cert (addons.mozilla.org)..."
+        ssl_certificate "addons.mozilla.org"
+        
+        # 恢复现有配置文件中的域名为 addons.mozilla.org (排除 argo 隧道相关的 vmess-ws 和 vless-ws-tls)
+        for FILE in ${WORK_DIR}/conf/*_inbounds.json; do
+          if [[ "$FILE" =~ "vless-ws-tls" ]]; then
+            continue
+          fi
+          if [ -s "$FILE" ] && grep -q 'certificate_path' "$FILE"; then
+            sed -i 's/"server_name":.*/"server_name":"addons.mozilla.org",/g' "$FILE"
+          fi
+        done
+
+        # 重启服务生效
+        systemctl restart sing-box >/dev/null 2>&1 || true
+        [ "$L" = "C" ] && info "成功回退到自签证书模式！" || info "Successfully reverted to self-signed certificate mode!"
+      else
+        [ "$L" = "C" ] && info "已取消操作。" || info "Operation cancelled."
+      fi
+      sleep 3
+      manage_acme_certificate_menu
+      ;;
+    0)
+      menu_setting
+      menu
+      ;;
+    *)
+      [ "$L" = "C" ] && warning "无效的选项！" || warning "Invalid option!"
+      sleep 2
+      manage_acme_certificate_menu
+      ;;
+  esac
+}
+
 # 判断当前 Sing-box 的运行状态，并对应的给菜单和动作赋值
 menu_setting() {
   if [[ "${STATUS[0]}" =~ $(text 27)|$(text 28) ]]; then
@@ -6490,6 +6733,7 @@ menu_setting() {
     OPTION[10]="10.  $(text 59)"
     OPTION[11]="11.  $(text 69)"
     OPTION[12]="12.  $(text 76)"
+    [ "$L" = "C" ] && OPTION[13]="13.  申请/管理 Let's Encrypt 证书" || OPTION[13]="13.  Apply/Manage Let's Encrypt Certificate"
 
     ACTION[1]() { export_list; exit 0; }
 
@@ -6525,6 +6769,7 @@ menu_setting() {
     ACTION[10]() { bash <(wget --no-check-certificate -qO- ${GH_PROXY}https://raw.githubusercontent.com/fscarmen/argox/main/argox.sh) -$L; exit; }
     ACTION[11]() { bash <(wget --no-check-certificate -qO- ${GH_PROXY}https://raw.githubusercontent.com/fscarmen/sba/main/sba.sh) -$L; exit; }
     ACTION[12]() { bash <(wget --no-check-certificate -qO- https://tcp.hy2.sh/); exit; }
+    ACTION[13]() { manage_acme_certificate_menu; exit; }
   else
     OPTION[1]="1.  $(text 115)"
     OPTION[2]="2.  $(text 34) + Argo + $(text 80) $(text 89)"
@@ -6845,6 +7090,7 @@ elif [ "$IS_FAST_INSTALL" = 'is_fast_install' ]; then
   export_list install
   create_shortcut
 else
+  create_shortcut >/dev/null 2>&1
   menu_setting
   menu
 fi
