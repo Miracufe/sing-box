@@ -5208,9 +5208,12 @@ export_list() {
   [[ "$SERVER_IP" =~ ^[0-9.]+$ ]] && [ -z "$WAN4" ] && WAN4="$SERVER_IP"
   [[ "$SERVER_IP" =~ : ]] && [ -z "$WAN6" ] && WAN6="$SERVER_IP"
 
+  local IS_DOMAIN=false
+  [[ ! "$SERVER_IP" =~ : && ! "$SERVER_IP" =~ ^[0-9.]+$ ]] && IS_DOMAIN=true
+
   local DUAL_STACK_ACTIVE=false
   local STACKS=("default")
-  if [ -n "$WAN4" ] && [ -n "$WAN6" ] && [ "$WAN4" != "$WAN6" ] && [[ ! "$SERVER_IP" =~ [a-zA-Z] ]]; then
+  if [ -n "$WAN4" ] && [ -n "$WAN6" ] && [ "$WAN4" != "$WAN6" ] && [ "$IS_DOMAIN" = 'false' ]; then
     DUAL_STACK_ACTIVE=true
     STACKS=("ipv4" "ipv6")
   fi
@@ -6156,7 +6159,7 @@ $(hint "${THRONE_SUBSCRIBE}")
 └────────────────┘
 ----------------------------
 
-$(info "$(echo "{ \"outbounds\":[ ${OUTBOUND_REPLACE%,} ] }" | ${WORK_DIR}/jq)
+$(info "$(echo "{ \"outbounds\":[ ${OUTBOUND_REPLACE%,} ] }" | sed 's/\\\"/\"/g' | ${WORK_DIR}/jq 2>/dev/null)
 
 ${PROMPT}
 
