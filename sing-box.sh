@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # 当前脚本版本号
-VERSION='v1.3.25 (2026.09.18)'
+VERSION='v1.3.26 (2026.09.18)'
 
 # Github 反代加速代理
 GITHUB_PROXY=('https://hub.glowp.xyz/' 'https://proxy.vvvv.ee/')
@@ -40,8 +40,8 @@ mkdir -p "$TEMP_DIR"
 
 E[0]="Language:\n 1. English (default) \n 2. 简体中文"
 C[0]="${E[0]}"
-E[1]="1. Add no-TUN environment support; 2. Fix Alpine OpenRC service stop error"
-C[1]="1. 新增无 TUN 环境支持; 2. 修复 Alpine OpenRC 服务停止误报"
+E[1]="1. Auto export dual-stack IPv4 and IPv6 nodes for dual-stack VPS; 2. Enhanced IP detection fallback"
+C[1]="1. 双栈 VPS 自动导出 IPv4 与 IPv6 双节点; 2. 增强 IP 检测容错"
 E[2]="Downloading Sing-box. Please wait a seconds ..."
 C[2]="下载 Sing-box 中，请稍等 ..."
 E[3]="Input errors up to 5 times.The script is aborted."
@@ -2685,6 +2685,10 @@ check_system_ip() {
   EMOJI6=$(awk -F '"' '/"emoji"/{print $4}' <<< "$IP6_JSON") &&
   ASNORG6=$(awk -F '"' '/"isp"/{print $4}' <<< "$IP6_JSON") &&
   rm -f $TEMP_DIR/ip6.json
+
+  # 兜底：若主要 API 未能获取到公网 IP，尝试备用接口
+  [ -z "$WAN4" ] && WAN4=$(wget $BIND_ADDRESS4 -4 -qO- --no-check-certificate --tries=1 --timeout=2 https://api.ipify.org 2>/dev/null || curl $BIND_ADDRESS4 -4 -s --max-time 2 https://api.ipify.org 2>/dev/null)
+  [ -z "$WAN6" ] && WAN6=$(wget $BIND_ADDRESS6 -6 -qO- --no-check-certificate --tries=1 --timeout=2 https://api64.ipify.org 2>/dev/null || curl $BIND_ADDRESS6 -6 -s --max-time 2 https://api64.ipify.org 2>/dev/null)
 }
 
 # 输入起始 port 函数
@@ -5199,6 +5203,18 @@ export_list() {
 
   [ "$IS_INSTALL" != 'install' ] && fetch_nodes_value
 
+  # 检测双栈公网 IP
+  [ -z "$WAN4" ] && [ -z "$WAN6" ] && check_system_ip
+  [[ "$SERVER_IP" =~ ^[0-9.]+$ ]] && [ -z "$WAN4" ] && WAN4="$SERVER_IP"
+  [[ "$SERVER_IP" =~ : ]] && [ -z "$WAN6" ] && WAN6="$SERVER_IP"
+
+  local DUAL_STACK_ACTIVE=false
+  local STACKS=("default")
+  if [ -n "$WAN4" ] && [ -n "$WAN6" ] && [ "$WAN4" != "$WAN6" ] && [[ ! "$SERVER_IP" =~ [a-zA-Z] ]]; then
+    DUAL_STACK_ACTIVE=true
+    STACKS=("ipv4" "ipv6")
+  fi
+
   # IPv6 时的 IP 处理
   if [[ "$SERVER_IP" =~ : ]]; then
     SERVER_IP_1="[$SERVER_IP]"
@@ -5211,8 +5227,10 @@ export_list() {
   # 使用 Argo 时，获取临时隧道域名
   ls ${WORK_DIR}/conf/*-ws*inbounds.json >/dev/null 2>&1 && [ "$IS_ARGO" = 'is_argo' ] && [ -z "$ARGO_DOMAIN" ] && [[ "${STATUS[1]}" = "$(text 28)" || "$NONINTERACTIVE_INSTALL" = 'noninteractive_install' ]] && fetch_quicktunnel_domain
 
-  # 如果使用 Json 或者 Token Argo，则使用加密的而且是固定的 Argo 隧道域名，否则使用 IP:PORT 的 http 服务
-  [[ "$ARGO_TYPE" = 'is_token_argo' || "$ARGO_TYPE" = 'is_json_argo' ]] && SUBSCRIBE_ADDRESS="https://$ARGO_DOMAIN" || SUBSCRIBE_ADDRESS="http://${SERVER_IP_1}:${PORT_NGINX}"
+  # 如果使用 Json 或者 Token Argo，则使用加密的而且是固定的 Argo 隧道域名，否则使用 IP:PORT 的 http 服务（双栈优先 IPv4）
+  local SUB_IP="${SERVER_IP_1}"
+  [ -n "$WAN4" ] && SUB_IP="$WAN4"
+  [[ "$ARGO_TYPE" = 'is_token_argo' || "$ARGO_TYPE" = 'is_json_argo' ]] && SUBSCRIBE_ADDRESS="https://$ARGO_DOMAIN" || SUBSCRIBE_ADDRESS="http://${SUB_IP}:${PORT_NGINX}"
 
   # v1.3.0 (2025.11.10)及之后 reality 使用 xtls-rprx-vision 流控替代多路复用 multiplex，但为了兼容旧版本已安装的客户端 URI，在这里作判断
   if [ -n "$PORT_XTLS_REALITY" ]; then
@@ -5313,101 +5331,184 @@ export_list() {
   # 生成各订阅文件
   # 生成 Clash proxy providers 订阅文件
   local CLASH_SUBSCRIBE='proxies:'
+  local CLASH2_PORT=()
+  local CLASH2_PROXY_INSERT=()
+  local CLASH2_PROXY_GROUPS_INSERT=()
 
-  [ -n "$PORT_XTLS_REALITY" ] && local CLASH_XTLS_REALITY="- {name: \"${NODE_NAME[11]} ${NODE_TAG[0]}\", type: vless, server: ${SERVER_IP}, port: ${PORT_XTLS_REALITY}, uuid: ${UUID[11]}, network: tcp, udp: true, tls: true${VISION_OR_MUX_CLASH}, servername: addons.mozilla.org, client-fingerprint: ${FINGER_PRINT}, reality-opts: {public-key: ${REALITY_PUBLIC[11]}, short-id: \"\"}, smux: { enabled: ${MULTIPLEX_PADDING_ENABLED}, protocol: 'h2mux', padding: ${MULTIPLEX_PADDING_ENABLED}, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${VISION_BRUTAL_ENABLED}, up: '1000 Mbps', down: '1000 Mbps' } }" &&
-  local CLASH_SUBSCRIBE+="
+  for STACK in "${STACKS[@]}"; do
+    local STACK_PREFIX=""
+    local CURR_IP="$SERVER_IP"
+    if [ "$STACK" = "ipv4" ]; then
+      STACK_PREFIX="IPv4 "
+      CURR_IP="$WAN4"
+    elif [ "$STACK" = "ipv6" ]; then
+      STACK_PREFIX=""
+      CURR_IP="$WAN6"
+    fi
+
+    if [ -n "$PORT_XTLS_REALITY" ]; then
+      local CLASH_XTLS_REALITY="- {name: \"${STACK_PREFIX}${NODE_NAME[11]} ${NODE_TAG[0]}\", type: vless, server: ${CURR_IP}, port: ${PORT_XTLS_REALITY}, uuid: ${UUID[11]}, network: tcp, udp: true, tls: true${VISION_OR_MUX_CLASH}, servername: addons.mozilla.org, client-fingerprint: ${FINGER_PRINT}, reality-opts: {public-key: ${REALITY_PUBLIC[11]}, short-id: \"\"}, smux: { enabled: ${MULTIPLEX_PADDING_ENABLED}, protocol: 'h2mux', padding: ${MULTIPLEX_PADDING_ENABLED}, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${VISION_BRUTAL_ENABLED}, up: '1000 Mbps', down: '1000 Mbps' } }"
+      CLASH_SUBSCRIBE+="
   $CLASH_XTLS_REALITY
 "
-  if [ -n "$PORT_HYSTERIA2" ]; then
-    [[ -n "$PORT_HOPPING_START" && -n "$PORT_HOPPING_END" ]] && local CLASH_HOPPING=" ports: ${PORT_HOPPING_START}-${PORT_HOPPING_END}, hop-interval: 30,"
-    local HY2_UP=${HY2_UP:-200}
-    local HY2_DOWN=${HY2_DOWN:-1000}
-    local CLASH_REALM_OPTS=""
-    if [ "$IS_HY2_REALM" = 'is_hy2_realm' ]; then
-      HY2_REALM_ID="${HY2_REALM_ID:-${UUID[12]}}"
-      CLASH_REALM_OPTS=", realm-opts: {enable: true, server-url: \"https://realm.hy2.io\", token: public, realm-id: \"${HY2_REALM_ID}\", stun-servers: [turn.cloudflare.com:3478, stun.nextcloud.com:3478, stun.sip.us:3478, global.stun.twilio.com:3478]}"
+      CLASH2_PORT+=("$PORT_XTLS_REALITY")
+      CLASH2_PROXY_INSERT+=("$CLASH_XTLS_REALITY")
+      CLASH2_PROXY_GROUPS_INSERT+=("- ${STACK_PREFIX}${NODE_NAME[11]} ${NODE_TAG[0]}")
     fi
-    local CLASH_HYSTERIA2="- {name: \"${NODE_NAME[12]} ${NODE_TAG[1]}\", type: hysteria2, server: ${SERVER_IP}, port: ${PORT_HYSTERIA2},${CLASH_HOPPING} up: \"${HY2_UP} Mbps\", down: \"${HY2_DOWN} Mbps\", password: ${UUID[12]}, sni: ${TLS_SERVER}, skip-cert-verify: false${CLASH_FP}${CLASH_REALM_OPTS}}" &&
-    local CLASH_SUBSCRIBE+="
+
+    if [ -n "$PORT_HYSTERIA2" ]; then
+      local CLASH_HOPPING=""
+      [[ -n "$PORT_HOPPING_START" && -n "$PORT_HOPPING_END" ]] && CLASH_HOPPING=" ports: ${PORT_HOPPING_START}-${PORT_HOPPING_END}, hop-interval: 30,"
+      local HY2_UP=${HY2_UP:-200}
+      local HY2_DOWN=${HY2_DOWN:-1000}
+      local CLASH_REALM_OPTS=""
+      if [ "$IS_HY2_REALM" = 'is_hy2_realm' ]; then
+        HY2_REALM_ID="${HY2_REALM_ID:-${UUID[12]}}"
+        CLASH_REALM_OPTS=", realm-opts: {enable: true, server-url: \"https://realm.hy2.io\", token: public, realm-id: \"${HY2_REALM_ID}\", stun-servers: [turn.cloudflare.com:3478, stun.nextcloud.com:3478, stun.sip.us:3478, global.stun.twilio.com:3478]}"
+      fi
+      local CLASH_HYSTERIA2="- {name: \"${STACK_PREFIX}${NODE_NAME[12]} ${NODE_TAG[1]}\", type: hysteria2, server: ${CURR_IP}, port: ${PORT_HYSTERIA2},${CLASH_HOPPING} up: \"${HY2_UP} Mbps\", down: \"${HY2_DOWN} Mbps\", password: ${UUID[12]}, sni: ${TLS_SERVER}, skip-cert-verify: false${CLASH_FP}${CLASH_REALM_OPTS}}"
+      CLASH_SUBSCRIBE+="
   $CLASH_HYSTERIA2
 "
-  fi
+      CLASH2_PORT+=("$PORT_HYSTERIA2")
+      CLASH2_PROXY_INSERT+=("$CLASH_HYSTERIA2")
+      CLASH2_PROXY_GROUPS_INSERT+=("- ${STACK_PREFIX}${NODE_NAME[12]} ${NODE_TAG[1]}")
+    fi
 
-  [ -n "$PORT_TUIC" ] && local CLASH_TUIC="- {name: \"${NODE_NAME[13]} ${NODE_TAG[2]}\", type: tuic, server: ${SERVER_IP}, port: ${PORT_TUIC}, uuid: ${UUID[13]}, password: ${TUIC_PASSWORD}, alpn: [h3], reduce-rtt: true, request-timeout: 8000, udp-relay-mode: native, congestion-controller: $TUIC_CONGESTION_CONTROL, sni: ${TLS_SERVER}, skip-cert-verify: false${CLASH_FP}}" &&
-  local CLASH_SUBSCRIBE+="
+    if [ -n "$PORT_TUIC" ]; then
+      local CLASH_TUIC="- {name: \"${STACK_PREFIX}${NODE_NAME[13]} ${NODE_TAG[2]}\", type: tuic, server: ${CURR_IP}, port: ${PORT_TUIC}, uuid: ${UUID[13]}, password: ${TUIC_PASSWORD}, alpn: [h3], reduce-rtt: true, request-timeout: 8000, udp-relay-mode: native, congestion-controller: $TUIC_CONGESTION_CONTROL, sni: ${TLS_SERVER}, skip-cert-verify: false${CLASH_FP}}"
+      CLASH_SUBSCRIBE+="
   $CLASH_TUIC
 "
-  [ -n "$PORT_SHADOWTLS" ] && local CLASH_SHADOWTLS="- {name: \"${NODE_NAME[14]} ${NODE_TAG[3]}\", type: ss, server: ${SERVER_IP}, port: ${PORT_SHADOWTLS}, cipher: $SHADOWTLS_METHOD, password: $SHADOWTLS_PASSWORD, plugin: shadow-tls, client-fingerprint: ${FINGER_PRINT}, plugin-opts: {host: ${TLS_SERVER}, password: \"${UUID[14]}\", version: 3}, smux: { enabled: true, protocol: 'h2mux', padding: true, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${IS_BRUTAL}, up: '1000 Mbps', down: '1000 Mbps' } }" &&
-  local CLASH_SUBSCRIBE+="
+      CLASH2_PORT+=("$PORT_TUIC")
+      CLASH2_PROXY_INSERT+=("$CLASH_TUIC")
+      CLASH2_PROXY_GROUPS_INSERT+=("- ${STACK_PREFIX}${NODE_NAME[13]} ${NODE_TAG[2]}")
+    fi
+
+    if [ -n "$PORT_SHADOWTLS" ]; then
+      local CLASH_SHADOWTLS="- {name: \"${STACK_PREFIX}${NODE_NAME[14]} ${NODE_TAG[3]}\", type: ss, server: ${CURR_IP}, port: ${PORT_SHADOWTLS}, cipher: $SHADOWTLS_METHOD, password: $SHADOWTLS_PASSWORD, plugin: shadow-tls, client-fingerprint: ${FINGER_PRINT}, plugin-opts: {host: ${TLS_SERVER}, password: \"${UUID[14]}\", version: 3}, smux: { enabled: true, protocol: 'h2mux', padding: true, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${IS_BRUTAL}, up: '1000 Mbps', down: '1000 Mbps' } }"
+      CLASH_SUBSCRIBE+="
   $CLASH_SHADOWTLS
 "
+      CLASH2_PORT+=("$PORT_SHADOWTLS")
+      CLASH2_PROXY_INSERT+=("$CLASH_SHADOWTLS")
+      CLASH2_PROXY_GROUPS_INSERT+=("- ${STACK_PREFIX}${NODE_NAME[14]} ${NODE_TAG[3]}")
+    fi
 
-  [ -n "$PORT_SHADOWSOCKS" ] && local CLASH_SHADOWSOCKS="- {name: \"${NODE_NAME[15]} ${NODE_TAG[4]}\", type: ss, server: ${SERVER_IP}, port: $PORT_SHADOWSOCKS, cipher: ${SHADOWSOCKS_METHOD}, password: ${SHADOWSOCKS_PASSWORD}, smux: { enabled: true, protocol: 'h2mux', padding: true, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${IS_BRUTAL}, up: '1000 Mbps', down: '1000 Mbps' } }" &&
-  local CLASH_SUBSCRIBE+="
+    if [ -n "$PORT_SHADOWSOCKS" ]; then
+      local CLASH_SHADOWSOCKS="- {name: \"${STACK_PREFIX}${NODE_NAME[15]} ${NODE_TAG[4]}\", type: ss, server: ${CURR_IP}, port: $PORT_SHADOWSOCKS, cipher: ${SHADOWSOCKS_METHOD}, password: ${SHADOWSOCKS_PASSWORD}, smux: { enabled: true, protocol: 'h2mux', padding: true, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${IS_BRUTAL}, up: '1000 Mbps', down: '1000 Mbps' } }"
+      CLASH_SUBSCRIBE+="
   $CLASH_SHADOWSOCKS
 "
-  [ -n "$PORT_TROJAN" ] && local CLASH_TROJAN="- {name: \"${NODE_NAME[16]} ${NODE_TAG[5]}\", type: trojan, server: ${SERVER_IP}, port: $PORT_TROJAN, password: $TROJAN_PASSWORD, client-fingerprint: ${FINGER_PRINT}, sni: ${TLS_SERVER}, skip-cert-verify: false${CLASH_FP}, smux: { enabled: true, protocol: 'h2mux', padding: true, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${IS_BRUTAL}, up: '1000 Mbps', down: '1000 Mbps' } }" &&
-  local CLASH_SUBSCRIBE+="
+      CLASH2_PORT+=("$PORT_SHADOWSOCKS")
+      CLASH2_PROXY_INSERT+=("$CLASH_SHADOWSOCKS")
+      CLASH2_PROXY_GROUPS_INSERT+=("- ${STACK_PREFIX}${NODE_NAME[15]} ${NODE_TAG[4]}")
+    fi
+
+    if [ -n "$PORT_TROJAN" ]; then
+      local CLASH_TROJAN="- {name: \"${STACK_PREFIX}${NODE_NAME[16]} ${NODE_TAG[5]}\", type: trojan, server: ${CURR_IP}, port: $PORT_TROJAN, password: $TROJAN_PASSWORD, client-fingerprint: ${FINGER_PRINT}, sni: ${TLS_SERVER}, skip-cert-verify: false${CLASH_FP}, smux: { enabled: true, protocol: 'h2mux', padding: true, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${IS_BRUTAL}, up: '1000 Mbps', down: '1000 Mbps' } }"
+      CLASH_SUBSCRIBE+="
   $CLASH_TROJAN
 "
-  if [ -n "$PORT_VMESS_WS" ]; then
-    local VMESS_CDN_PORT=${CDN_PORT[17]:-80}
-    local VMESS_CDN_SERVER=$(format_uri_host "${CDN[17]}")
-    if [[ "${STATUS[1]}" =~ $(text 27)|$(text 28) ]] || [[ "$IS_ARGO" = 'is_argo' && "$NONINTERACTIVE_INSTALL" = 'noninteractive_install' ]]; then
-      local CLASH_VMESS_WS="- {name: \"${NODE_NAME[17]} ${NODE_TAG[6]}\", type: vmess, server: ${VMESS_CDN_SERVER}, port: ${VMESS_CDN_PORT}, uuid: ${UUID[17]}, udp: true, tls: false, alterId: 0, cipher: auto, network: ws, ws-opts: { path: \"/$VMESS_WS_PATH\", headers: {Host: $ARGO_DOMAIN} }, smux: { enabled: true, protocol: 'h2mux', padding: true, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${IS_BRUTAL}, up: '1000 Mbps', down: '1000 Mbps' } }" &&
-      local CLASH_SUBSCRIBE+="
+      CLASH2_PORT+=("$PORT_TROJAN")
+      CLASH2_PROXY_INSERT+=("$CLASH_TROJAN")
+      CLASH2_PROXY_GROUPS_INSERT+=("- ${STACK_PREFIX}${NODE_NAME[16]} ${NODE_TAG[5]}")
+    fi
+
+    if [ -n "$PORT_VMESS_WS" ]; then
+      local VMESS_CDN_PORT=${CDN_PORT[17]:-80}
+      local CURR_VMESS_CDN="${CDN[17]}"
+      if [ "$STACK" = "ipv4" ]; then
+        [[ "$CURR_VMESS_CDN" =~ : ]] && CURR_VMESS_CDN="104.17.78.30"
+      elif [ "$STACK" = "ipv6" ]; then
+        [[ -n "$CURR_VMESS_CDN" && ! "$CURR_VMESS_CDN" =~ : && "$CURR_VMESS_CDN" =~ ^[0-9.]+$ ]] && CURR_VMESS_CDN="2606:4700:9ad0:bd57:def6:e9ce:cc72:2ff6"
+      fi
+      local VMESS_CDN_SERVER=$(format_uri_host "${CURR_VMESS_CDN}")
+      local CLASH_VMESS_WS=""
+      if [[ "${STATUS[1]}" =~ $(text 27)|$(text 28) ]] || [[ "$IS_ARGO" = 'is_argo' && "$NONINTERACTIVE_INSTALL" = 'noninteractive_install' ]]; then
+        CLASH_VMESS_WS="- {name: \"${STACK_PREFIX}${NODE_NAME[17]} ${NODE_TAG[6]}\", type: vmess, server: ${VMESS_CDN_SERVER}, port: ${VMESS_CDN_PORT}, uuid: ${UUID[17]}, udp: true, tls: false, alterId: 0, cipher: auto, network: ws, ws-opts: { path: \"/$VMESS_WS_PATH\", headers: {Host: $ARGO_DOMAIN} }, smux: { enabled: true, protocol: 'h2mux', padding: true, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${IS_BRUTAL}, up: '1000 Mbps', down: '1000 Mbps' } }"
+        CLASH_SUBSCRIBE+="
   $CLASH_VMESS_WS
 "
-      [ "$ARGO_TYPE" = 'is_token_argo' ] && CLASH_SUBSCRIBE+="
+        [ "$ARGO_TYPE" = 'is_token_argo' ] && CLASH_SUBSCRIBE+="
   # $(text 94)
 "
-    else
-      local CLASH_VMESS_WS="- {name: \"${NODE_NAME[17]} ${NODE_TAG[6]}\", type: vmess, server: ${VMESS_CDN_SERVER}, port: ${VMESS_CDN_PORT}, uuid: ${UUID[17]}, udp: true, tls: false, alterId: 0, cipher: auto, network: ws, ws-opts: { path: \"/$VMESS_WS_PATH\", headers: {Host: $VMESS_HOST_DOMAIN} }, smux: { enabled: true, protocol: 'h2mux', padding: true, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${IS_BRUTAL}, up: '1000 Mbps', down: '1000 Mbps' } }" &&
-      local WS_SERVER_IP_SHOW=${WS_SERVER_IP[17]} && local TYPE_HOST_DOMAIN=$VMESS_HOST_DOMAIN && local TYPE_PORT_WS=$PORT_VMESS_WS &&
-      local CLASH_SUBSCRIBE+="
+      else
+        CLASH_VMESS_WS="- {name: \"${STACK_PREFIX}${NODE_NAME[17]} ${NODE_TAG[6]}\", type: vmess, server: ${VMESS_CDN_SERVER}, port: ${VMESS_CDN_PORT}, uuid: ${UUID[17]}, udp: true, tls: false, alterId: 0, cipher: auto, network: ws, ws-opts: { path: \"/$VMESS_WS_PATH\", headers: {Host: $VMESS_HOST_DOMAIN} }, smux: { enabled: true, protocol: 'h2mux', padding: true, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${IS_BRUTAL}, up: '1000 Mbps', down: '1000 Mbps' } }"
+        local WS_SERVER_IP_SHOW=${WS_SERVER_IP[17]} && local TYPE_HOST_DOMAIN=$VMESS_HOST_DOMAIN && local TYPE_PORT_WS=$PORT_VMESS_WS &&
+        CLASH_SUBSCRIBE+="
   $CLASH_VMESS_WS
 
   # $(text 52)
 "
+      fi
+      CLASH2_PORT+=("$PORT_VMESS_WS")
+      CLASH2_PROXY_INSERT+=("$CLASH_VMESS_WS")
+      CLASH2_PROXY_GROUPS_INSERT+=("- ${STACK_PREFIX}${NODE_NAME[17]} ${NODE_TAG[6]}")
     fi
-  fi
 
-  if [ -n "$PORT_VLESS_WS" ]; then
-    local VLESS_CDN_PORT=${CDN_PORT[18]:-443}
-    local VLESS_CDN_SERVER=$(format_uri_host "${CDN[18]}")
-     if [[ "${STATUS[1]}" =~ $(text 27)|$(text 28) ]] || [[ "$IS_ARGO" = 'is_argo' && "$NONINTERACTIVE_INSTALL" = 'noninteractive_install' ]]; then
-      local CLASH_VLESS_WS="- {name: \"${NODE_NAME[18]} ${NODE_TAG[7]}\", type: vless, server: ${VLESS_CDN_SERVER}, port: ${VLESS_CDN_PORT}, uuid: ${UUID[18]}, udp: true, tls: true, servername: $ARGO_DOMAIN, network: ws, skip-cert-verify: false, ws-opts: { path: \"/$VLESS_WS_PATH\", headers: {Host: $ARGO_DOMAIN}, max-early-data: 2560, early-data-header-name: Sec-WebSocket-Protocol }, smux: { enabled: true, protocol: 'h2mux', padding: true, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${IS_BRUTAL}, up: '1000 Mbps', down: '1000 Mbps' } }" &&
-      local CLASH_SUBSCRIBE+="
+    if [ -n "$PORT_VLESS_WS" ]; then
+      local VLESS_CDN_PORT=${CDN_PORT[18]:-443}
+      local CURR_VLESS_CDN="${CDN[18]}"
+      if [ "$STACK" = "ipv4" ]; then
+        [[ "$CURR_VLESS_CDN" =~ : ]] && CURR_VLESS_CDN="104.17.78.30"
+      elif [ "$STACK" = "ipv6" ]; then
+        [[ -n "$CURR_VLESS_CDN" && ! "$CURR_VLESS_CDN" =~ : && "$CURR_VLESS_CDN" =~ ^[0-9.]+$ ]] && CURR_VLESS_CDN="2606:4700:9ad0:bd57:def6:e9ce:cc72:2ff6"
+      fi
+      local VLESS_CDN_SERVER=$(format_uri_host "${CURR_VLESS_CDN}")
+      local CLASH_VLESS_WS=""
+      if [[ "${STATUS[1]}" =~ $(text 27)|$(text 28) ]] || [[ "$IS_ARGO" = 'is_argo' && "$NONINTERACTIVE_INSTALL" = 'noninteractive_install' ]]; then
+        CLASH_VLESS_WS="- {name: \"${STACK_PREFIX}${NODE_NAME[18]} ${NODE_TAG[7]}\", type: vless, server: ${VLESS_CDN_SERVER}, port: ${VLESS_CDN_PORT}, uuid: ${UUID[18]}, udp: true, tls: true, servername: $ARGO_DOMAIN, network: ws, skip-cert-verify: false, ws-opts: { path: \"/$VLESS_WS_PATH\", headers: {Host: $ARGO_DOMAIN}, max-early-data: 2560, early-data-header-name: Sec-WebSocket-Protocol }, smux: { enabled: true, protocol: 'h2mux', padding: true, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${IS_BRUTAL}, up: '1000 Mbps', down: '1000 Mbps' } }"
+        CLASH_SUBSCRIBE+="
   $CLASH_VLESS_WS
 "
-      [ "$ARGO_TYPE" = 'is_token_argo' ] && CLASH_SUBSCRIBE+="
+        [ "$ARGO_TYPE" = 'is_token_argo' ] && CLASH_SUBSCRIBE+="
   # $(text 94)
 "
-    else
-      local CLASH_VLESS_WS="- {name: \"${NODE_NAME[18]} ${NODE_TAG[7]}\", type: vless, server: ${VLESS_CDN_SERVER}, port: ${VLESS_CDN_PORT}, uuid: ${UUID[18]}, udp: true, tls: true, servername: $VLESS_HOST_DOMAIN, network: ws, skip-cert-verify: false, ws-opts: { path: \"/$VLESS_WS_PATH\", headers: {Host: $VLESS_HOST_DOMAIN}, max-early-data: 2560, early-data-header-name: Sec-WebSocket-Protocol }, smux: { enabled: true, protocol: 'h2mux', padding: true, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${IS_BRUTAL}, up: '1000 Mbps', down: '1000 Mbps' } }" &&
-      local WS_SERVER_IP_SHOW=${WS_SERVER_IP[18]} && local TYPE_HOST_DOMAIN=$VLESS_HOST_DOMAIN && local TYPE_PORT_WS=$PORT_VLESS_WS &&
-      local CLASH_SUBSCRIBE+="
+      else
+        CLASH_VLESS_WS="- {name: \"${STACK_PREFIX}${NODE_NAME[18]} ${NODE_TAG[7]}\", type: vless, server: ${VLESS_CDN_SERVER}, port: ${VLESS_CDN_PORT}, uuid: ${UUID[18]}, udp: true, tls: true, servername: $VLESS_HOST_DOMAIN, network: ws, skip-cert-verify: false, ws-opts: { path: \"/$VLESS_WS_PATH\", headers: {Host: $VLESS_HOST_DOMAIN}, max-early-data: 2560, early-data-header-name: Sec-WebSocket-Protocol }, smux: { enabled: true, protocol: 'h2mux', padding: true, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${IS_BRUTAL}, up: '1000 Mbps', down: '1000 Mbps' } }"
+        local WS_SERVER_IP_SHOW=${WS_SERVER_IP[18]} && local TYPE_HOST_DOMAIN=$VLESS_HOST_DOMAIN && local TYPE_PORT_WS=$PORT_VLESS_WS &&
+        CLASH_SUBSCRIBE+="
   $CLASH_VLESS_WS
 
   # $(text 52)
 "
+      fi
+      CLASH2_PORT+=("$PORT_VLESS_WS")
+      CLASH2_PROXY_INSERT+=("$CLASH_VLESS_WS")
+      CLASH2_PROXY_GROUPS_INSERT+=("- ${STACK_PREFIX}${NODE_NAME[18]} ${NODE_TAG[7]}")
     fi
-  fi
 
-  [ -n "$PORT_H2_REALITY" ] && local CLASH_H2_REALITY="- {name: \"${NODE_NAME[19]} ${NODE_TAG[8]}\", type: vless, server: ${SERVER_IP}, port: ${PORT_H2_REALITY}, uuid: ${UUID[19]}, network: http, tls: true, servername: addons.mozilla.org, client-fingerprint: ${FINGER_PRINT}, reality-opts: { public-key: ${REALITY_PUBLIC[19]}, short-id: \"\" }, smux: { enabled: true, protocol: 'h2mux', padding: true, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${IS_BRUTAL}, up: '1000 Mbps', down: '1000 Mbps' } }" &&
-  local CLASH_SUBSCRIBE+="
+    if [ -n "$PORT_H2_REALITY" ]; then
+      local CLASH_H2_REALITY="- {name: \"${STACK_PREFIX}${NODE_NAME[19]} ${NODE_TAG[8]}\", type: vless, server: ${CURR_IP}, port: ${PORT_H2_REALITY}, uuid: ${UUID[19]}, network: http, tls: true, servername: addons.mozilla.org, client-fingerprint: ${FINGER_PRINT}, reality-opts: { public-key: ${REALITY_PUBLIC[19]}, short-id: \"\" }, smux: { enabled: true, protocol: 'h2mux', padding: true, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${IS_BRUTAL}, up: '1000 Mbps', down: '1000 Mbps' } }"
+      CLASH_SUBSCRIBE+="
   $CLASH_H2_REALITY
 "
+      CLASH2_PORT+=("$PORT_H2_REALITY")
+      CLASH2_PROXY_INSERT+=("$CLASH_H2_REALITY")
+      CLASH2_PROXY_GROUPS_INSERT+=("- ${STACK_PREFIX}${NODE_NAME[19]} ${NODE_TAG[8]}")
+    fi
 
-  [ -n "$PORT_GRPC_REALITY" ] && local CLASH_GRPC_REALITY="- {name: \"${NODE_NAME[20]} ${NODE_TAG[9]}\", type: vless, server: ${SERVER_IP}, port: ${PORT_GRPC_REALITY}, uuid: ${UUID[20]}, network: grpc, tls: true, udp: true, flow: , client-fingerprint: ${FINGER_PRINT}, servername: addons.mozilla.org, grpc-opts: {  grpc-service-name: \"grpc\" }, reality-opts: { public-key: ${REALITY_PUBLIC[20]}, short-id: \"\" }, smux: { enabled: true, protocol: 'h2mux', padding: true, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${IS_BRUTAL}, up: '1000 Mbps', down: '1000 Mbps' } }" &&
-  local CLASH_SUBSCRIBE+="
+    if [ -n "$PORT_GRPC_REALITY" ]; then
+      local CLASH_GRPC_REALITY="- {name: \"${STACK_PREFIX}${NODE_NAME[20]} ${NODE_TAG[9]}\", type: vless, server: ${CURR_IP}, port: ${PORT_GRPC_REALITY}, uuid: ${UUID[20]}, network: grpc, tls: true, udp: true, flow: , client-fingerprint: ${FINGER_PRINT}, servername: addons.mozilla.org, grpc-opts: {  grpc-service-name: \"grpc\" }, reality-opts: { public-key: ${REALITY_PUBLIC[20]}, short-id: \"\" }, smux: { enabled: true, protocol: 'h2mux', padding: true, max-connections: '8', min-streams: '16', statistic: true, only-tcp: false }, brutal-opts: { enabled: ${IS_BRUTAL}, up: '1000 Mbps', down: '1000 Mbps' } }"
+      CLASH_SUBSCRIBE+="
   $CLASH_GRPC_REALITY
 "
+      CLASH2_PORT+=("$PORT_GRPC_REALITY")
+      CLASH2_PROXY_INSERT+=("$CLASH_GRPC_REALITY")
+      CLASH2_PROXY_GROUPS_INSERT+=("- ${STACK_PREFIX}${NODE_NAME[20]} ${NODE_TAG[9]}")
+    fi
 
-  [ -n "$PORT_ANYTLS" ] && local CLASH_ANYTLS="- {name: \"${NODE_NAME[21]} ${NODE_TAG[10]}\", type: anytls, server: ${SERVER_IP}, port: $PORT_ANYTLS, password: ${UUID[21]}, client-fingerprint: ${FINGER_PRINT}, udp: true, idle-session-check-interval: 30, idle-session-timeout: 30, sni: ${TLS_SERVER}, skip-cert-verify: false${CLASH_FP} }" &&
-  local CLASH_SUBSCRIBE+="
+    if [ -n "$PORT_ANYTLS" ]; then
+      local CLASH_ANYTLS="- {name: \"${STACK_PREFIX}${NODE_NAME[21]} ${NODE_TAG[10]}\", type: anytls, server: ${CURR_IP}, port: $PORT_ANYTLS, password: ${UUID[21]}, client-fingerprint: ${FINGER_PRINT}, udp: true, idle-session-check-interval: 30, idle-session-timeout: 30, sni: ${TLS_SERVER}, skip-cert-verify: false${CLASH_FP} }"
+      CLASH_SUBSCRIBE+="
   $CLASH_ANYTLS
 "
+      CLASH2_PORT+=("$PORT_ANYTLS")
+      CLASH2_PROXY_INSERT+=("$CLASH_ANYTLS")
+      CLASH2_PROXY_GROUPS_INSERT+=("- ${STACK_PREFIX}${NODE_NAME[21]} ${NODE_TAG[10]}")
+    fi
+  done
 
   echo -n "${CLASH_SUBSCRIBE}" | sed -E '/^[ ]*#|^--/d' | sed '/^$/d' > ${WORK_DIR}/subscribe/proxies
 
@@ -5417,10 +5518,6 @@ export_list() {
     cat ${TEMP_DIR}/clash | sed "s#NODE_NAME#${NODE_NAME_CONFIRM}#g; s#PROXY_PROVIDERS_URL#$SUBSCRIBE_ADDRESS/${UUID_CONFIRM}/proxies#" > ${WORK_DIR}/subscribe/clash
 
     # 模板2: 不使用 proxy providers
-    CLASH2_PORT=("$PORT_XTLS_REALITY" "$PORT_HYSTERIA2" "$PORT_TUIC" "$PORT_SHADOWTLS" "$PORT_SHADOWSOCKS" "$PORT_TROJAN" "$PORT_VMESS_WS" "$PORT_VLESS_WS" "$PORT_GRPC_REALITY" "$PORT_ANYTLS")
-    CLASH2_PROXY_INSERT=("$CLASH_XTLS_REALITY" "$CLASH_HYSTERIA2" "$CLASH_TUIC" "$CLASH_SHADOWTLS" "$CLASH_SHADOWSOCKS" "$CLASH_TROJAN" "$CLASH_VMESS_WS" "$CLASH_VLESS_WS" "$CLASH_GRPC_REALITY" "$CLASH_ANYTLS")
-    CLASH2_PROXY_GROUPS_INSERT=("- ${NODE_NAME[11]} ${NODE_TAG[0]}" "- ${NODE_NAME[12]} ${NODE_TAG[1]}" "- ${NODE_NAME[13]} ${NODE_TAG[2]}" "- ${NODE_NAME[14]} ${NODE_TAG[3]}" "- ${NODE_NAME[15]} ${NODE_TAG[4]}" "- ${NODE_NAME[16]} ${NODE_TAG[5]}" "- ${NODE_NAME[17]} ${NODE_TAG[6]}" "- ${NODE_NAME[18]} ${NODE_TAG[7]}" "- ${NODE_NAME[20]} ${NODE_TAG[9]}" "- ${NODE_NAME[21]} ${NODE_TAG[10]}")
-
     CLASH2_YAML=$(cat ${TEMP_DIR}/clash2)
     for x in ${!CLASH2_PORT[@]}; do
       [[ ${CLASH2_PORT[x]} =~ [0-9]+ ]] && { CLASH2_YAML=$(sed "/proxy-groups:/i\  ${CLASH2_PROXY_INSERT[x]}" <<< "$CLASH2_YAML"); CLASH2_YAML=$(sed -E "/- name: (♻️ 自动选择|📲 电报消息|💬 OpenAi|📹 油管视频|🎥 奈飞视频|📺 巴哈姆特|📺 哔哩哔哩|🌍 国外媒体|🌏 国内媒体|📢 谷歌FCM|Ⓜ️ 微软Bing|Ⓜ️ 微软云盘|Ⓜ️ 微软服务|🍎 苹果服务|🎮 游戏平台|🎶 网易音乐|🎯 全球直连)|^rules:$/i\      ${CLASH2_PROXY_GROUPS_INSERT[x]}" <<< "$CLASH2_YAML"); }
@@ -5431,106 +5528,177 @@ export_list() {
   } &>/dev/null
 
   # 生成 ShadowRocket 订阅配置文件
-  [ -n "$PORT_XTLS_REALITY" ] && local SHADOWROCKET_SUBSCRIBE+="
-vless://$(echo -n "auto:${UUID[11]}@${SERVER_IP_2}:${PORT_XTLS_REALITY}" | base64 -w0)?remarks=${NODE_NAME[11]// /%20}%20${NODE_TAG[0]}&tls=1&peer=addons.mozilla.org&${VISION_OR_MUX_SHADOWROCKET}&pbk=${REALITY_PUBLIC[11]}
+  local SHADOWROCKET_SUBSCRIBE=""
+  for STACK in "${STACKS[@]}"; do
+    local STACK_PREFIX=""
+    local STACK_NAME_PREFIX=""
+    local CURR_IP="$SERVER_IP"
+    local SERVER_IP_1="$SERVER_IP"
+    local SERVER_IP_2="$SERVER_IP"
+    if [ "$STACK" = "ipv4" ]; then
+      STACK_PREFIX="IPv4 "
+      STACK_NAME_PREFIX="IPv4%20"
+      CURR_IP="$WAN4"
+      SERVER_IP_1="$WAN4"
+      SERVER_IP_2="$WAN4"
+    elif [ "$STACK" = "ipv6" ]; then
+      STACK_PREFIX=""
+      STACK_NAME_PREFIX=""
+      CURR_IP="$WAN6"
+      SERVER_IP_1="[$WAN6]"
+      SERVER_IP_2="[[$WAN6]]"
+    else
+      if [[ "$CURR_IP" =~ : ]]; then
+        SERVER_IP_1="[$CURR_IP]"
+        SERVER_IP_2="[[$CURR_IP]]"
+      fi
+    fi
+
+    local CURR_NAIVE_SERVER_2="${NAIVE_SERVER}"
+    [ "$IS_NAIVE_COMMERCIAL" = "false" ] && CURR_NAIVE_SERVER_2="${SERVER_IP_2}"
+    [[ "$CURR_NAIVE_SERVER_2" =~ : && ! "$CURR_NAIVE_SERVER_2" =~ ^\[\[ ]] && CURR_NAIVE_SERVER_2="[[${CURR_NAIVE_SERVER_2}]]"
+
+    [ -n "$PORT_XTLS_REALITY" ] && SHADOWROCKET_SUBSCRIBE+="
+vless://$(echo -n "auto:${UUID[11]}@${SERVER_IP_2}:${PORT_XTLS_REALITY}" | base64 -w0)?remarks=${STACK_NAME_PREFIX}${NODE_NAME[11]// /%20}%20${NODE_TAG[0]}&tls=1&peer=addons.mozilla.org&${VISION_OR_MUX_SHADOWROCKET}&pbk=${REALITY_PUBLIC[11]}
 "
-  if [ -n "$PORT_HYSTERIA2" ]; then
-    local SHADOWROCKET_PARAMS="peer=${TLS_SERVER}${SHADOWROCKET_HPKP}&obfs=none&upmbps=${HY2_UP}&downmbps=${HY2_DOWN}"
-    [[ -n "$PORT_HOPPING_START" && -n "$PORT_HOPPING_END" ]] && SHADOWROCKET_PARAMS+="&keepalive=30&mport=${PORT_HYSTERIA2},${PORT_HOPPING_START}-${PORT_HOPPING_END}"
-    local SHADOWROCKET_SUBSCRIBE+="
-hysteria2://${UUID[12]}@${SERVER_IP_1}:${PORT_HYSTERIA2}?${SHADOWROCKET_PARAMS}#${NODE_NAME[12]// /%20}%20${NODE_TAG[1]}
+    if [ -n "$PORT_HYSTERIA2" ]; then
+      local SHADOWROCKET_PARAMS="peer=${TLS_SERVER}${SHADOWROCKET_HPKP}&obfs=none&upmbps=${HY2_UP}&downmbps=${HY2_DOWN}"
+      [[ -n "$PORT_HOPPING_START" && -n "$PORT_HOPPING_END" ]] && SHADOWROCKET_PARAMS+="&keepalive=30&mport=${PORT_HYSTERIA2},${PORT_HOPPING_START}-${PORT_HOPPING_END}"
+      SHADOWROCKET_SUBSCRIBE+="
+hysteria2://${UUID[12]}@${SERVER_IP_1}:${PORT_HYSTERIA2}?${SHADOWROCKET_PARAMS}#${STACK_NAME_PREFIX}${NODE_NAME[12]// /%20}%20${NODE_TAG[1]}
 "
-  fi
-  [ -n "$PORT_TUIC" ] && local SHADOWROCKET_SUBSCRIBE+="
-tuic://${TUIC_PASSWORD}:${UUID[13]}@${SERVER_IP_2}:${PORT_TUIC}?peer=${TLS_SERVER}&congestion_control=$TUIC_CONGESTION_CONTROL&udp_relay_mode=native&alpn=h3${SHADOWROCKET_HPKP}#${NODE_NAME[13]// /%20}%20${NODE_TAG[2]}
+    fi
+    [ -n "$PORT_TUIC" ] && SHADOWROCKET_SUBSCRIBE+="
+tuic://${TUIC_PASSWORD}:${UUID[13]}@${SERVER_IP_2}:${PORT_TUIC}?peer=${TLS_SERVER}&congestion_control=$TUIC_CONGESTION_CONTROL&udp_relay_mode=native&alpn=h3${SHADOWROCKET_HPKP}#${STACK_NAME_PREFIX}${NODE_NAME[13]// /%20}%20${NODE_TAG[2]}
 "
-  [ -n "$PORT_SHADOWTLS" ] && local SHADOWROCKET_SUBSCRIBE+="
-ss://$(echo -n "$SHADOWTLS_METHOD:$SHADOWTLS_PASSWORD@${SERVER_IP_2}:${PORT_SHADOWTLS}" | base64 -w0)?shadow-tls=$(echo -n "{\"version\":\"3\",\"host\":\"${TLS_SERVER}\",\"password\":\"${UUID[14]}\"}" | base64 -w0)#${NODE_NAME[14]// /%20}%20${NODE_TAG[3]}
+    [ -n "$PORT_SHADOWTLS" ] && SHADOWROCKET_SUBSCRIBE+="
+ss://$(echo -n "$SHADOWTLS_METHOD:$SHADOWTLS_PASSWORD@${SERVER_IP_2}:${PORT_SHADOWTLS}" | base64 -w0)?shadow-tls=$(echo -n "{\"version\":\"3\",\"host\":\"${TLS_SERVER}\",\"password\":\"${UUID[14]}\"}" | base64 -w0)#${STACK_NAME_PREFIX}${NODE_NAME[14]// /%20}%20${NODE_TAG[3]}
 "
-  [ -n "$PORT_SHADOWSOCKS" ] && local SHADOWROCKET_SUBSCRIBE+="
-ss://$(echo -n "${SHADOWSOCKS_METHOD}:${SHADOWSOCKS_PASSWORD}@${SERVER_IP_2}:$PORT_SHADOWSOCKS" | base64 -w0)#${NODE_NAME[15]// /%20}%20${NODE_TAG[4]}
+    [ -n "$PORT_SHADOWSOCKS" ] && SHADOWROCKET_SUBSCRIBE+="
+ss://$(echo -n "${SHADOWSOCKS_METHOD}:${SHADOWSOCKS_PASSWORD}@${SERVER_IP_2}:$PORT_SHADOWSOCKS" | base64 -w0)#${STACK_NAME_PREFIX}${NODE_NAME[15]// /%20}%20${NODE_TAG[4]}
 "
-  [ -n "$PORT_TROJAN" ] && local SHADOWROCKET_SUBSCRIBE+="
-trojan://${TROJAN_PASSWORD}@${SERVER_IP_1}:$PORT_TROJAN?peer=${TLS_SERVER}${SHADOWROCKET_HPKP}#${NODE_NAME[16]// /%20}%20${NODE_TAG[5]}
+    [ -n "$PORT_TROJAN" ] && SHADOWROCKET_SUBSCRIBE+="
+trojan://${TROJAN_PASSWORD}@${SERVER_IP_1}:$PORT_TROJAN?peer=${TLS_SERVER}${SHADOWROCKET_HPKP}#${STACK_NAME_PREFIX}${NODE_NAME[16]// /%20}%20${NODE_TAG[5]}
 "
-  if [ -n "$PORT_VMESS_WS" ]; then
-    local VMESS_CDN_PORT=${CDN_PORT[17]:-80}
-    local VMESS_CDN_HOST=$(format_uri_host "${CDN[17]}")
-     if [[ "${STATUS[1]}" =~ $(text 27)|$(text 28) ]] || [[ "$IS_ARGO" = 'is_argo' && "$NONINTERACTIVE_INSTALL" = 'noninteractive_install' ]]; then
-      local SHADOWROCKET_SUBSCRIBE+="
+    if [ -n "$PORT_VMESS_WS" ]; then
+      local VMESS_CDN_PORT=${CDN_PORT[17]:-80}
+      local CURR_VMESS_CDN="${CDN[17]}"
+      if [ "$STACK" = "ipv4" ]; then
+        [[ "$CURR_VMESS_CDN" =~ : ]] && CURR_VMESS_CDN="104.17.78.30"
+      elif [ "$STACK" = "ipv6" ]; then
+        [[ -n "$CURR_VMESS_CDN" && ! "$CURR_VMESS_CDN" =~ : && "$CURR_VMESS_CDN" =~ ^[0-9.]+$ ]] && CURR_VMESS_CDN="2606:4700:9ad0:bd57:def6:e9ce:cc72:2ff6"
+      fi
+      local VMESS_CDN_HOST=$(format_uri_host "${CURR_VMESS_CDN}")
+      if [[ "${STATUS[1]}" =~ $(text 27)|$(text 28) ]] || [[ "$IS_ARGO" = 'is_argo' && "$NONINTERACTIVE_INSTALL" = 'noninteractive_install' ]]; then
+        SHADOWROCKET_SUBSCRIBE+="
 ----------------------------
-vmess://$(echo -n "auto:${UUID[17]}@${VMESS_CDN_HOST}:${VMESS_CDN_PORT}" | base64 -w0)?remarks=${NODE_NAME[17]// /%20}%20${NODE_TAG[6]}&obfsParam=$ARGO_DOMAIN&path=/$VMESS_WS_PATH&obfs=websocket&alterId=0
+vmess://$(echo -n "auto:${UUID[17]}@${VMESS_CDN_HOST}:${VMESS_CDN_PORT}" | base64 -w0)?remarks=${STACK_NAME_PREFIX}${NODE_NAME[17]// /%20}%20${NODE_TAG[6]}&obfsParam=$ARGO_DOMAIN&path=/$VMESS_WS_PATH&obfs=websocket&alterId=0
 "
-      [ "$ARGO_TYPE" = 'is_token_argo' ] && SHADOWROCKET_SUBSCRIBE+="
+        [ "$ARGO_TYPE" = 'is_token_argo' ] && SHADOWROCKET_SUBSCRIBE+="
   # $(text 94)
 "
-    else
-      WS_SERVER_IP_SHOW=${WS_SERVER_IP[17]} && TYPE_HOST_DOMAIN=$VMESS_HOST_DOMAIN && TYPE_PORT_WS=$PORT_VMESS_WS && local SHADOWROCKET_SUBSCRIBE+="
+      else
+        local WS_SERVER_IP_SHOW=${WS_SERVER_IP[17]} && local TYPE_HOST_DOMAIN=$VMESS_HOST_DOMAIN && local TYPE_PORT_WS=$PORT_VMESS_WS &&
+        SHADOWROCKET_SUBSCRIBE+="
 ----------------------------
-vmess://$(echo -n "auto:${UUID[17]}@${VMESS_CDN_HOST}:${VMESS_CDN_PORT}" | base64 -w0)?remarks=${NODE_NAME[17]// /%20}%20${NODE_TAG[6]}&obfsParam=$VMESS_HOST_DOMAIN&path=/$VMESS_WS_PATH&obfs=websocket&alterId=0
+vmess://$(echo -n "auto:${UUID[17]}@${VMESS_CDN_HOST}:${VMESS_CDN_PORT}" | base64 -w0)?remarks=${STACK_NAME_PREFIX}${NODE_NAME[17]// /%20}%20${NODE_TAG[6]}&obfsParam=$VMESS_HOST_DOMAIN&path=/$VMESS_WS_PATH&obfs=websocket&alterId=0
 
 # $(text 52)
 "
+      fi
     fi
-  fi
 
-  if [ -n "$PORT_VLESS_WS" ]; then
-    local VLESS_CDN_PORT=${CDN_PORT[18]:-443}
-    local VLESS_CDN_HOST=$(format_uri_host "${CDN[18]}")
-     if [[ "${STATUS[1]}" =~ $(text 27)|$(text 28) ]] || [[ "$IS_ARGO" = 'is_argo' && "$NONINTERACTIVE_INSTALL" = 'noninteractive_install' ]]; then
-      local SHADOWROCKET_SUBSCRIBE+="
+    if [ -n "$PORT_VLESS_WS" ]; then
+      local VLESS_CDN_PORT=${CDN_PORT[18]:-443}
+      local CURR_VLESS_CDN="${CDN[18]}"
+      if [ "$STACK" = "ipv4" ]; then
+        [[ "$CURR_VLESS_CDN" =~ : ]] && CURR_VLESS_CDN="104.17.78.30"
+      elif [ "$STACK" = "ipv6" ]; then
+        [[ -n "$CURR_VLESS_CDN" && ! "$CURR_VLESS_CDN" =~ : && "$CURR_VLESS_CDN" =~ ^[0-9.]+$ ]] && CURR_VLESS_CDN="2606:4700:9ad0:bd57:def6:e9ce:cc72:2ff6"
+      fi
+      local VLESS_CDN_HOST=$(format_uri_host "${CURR_VLESS_CDN}")
+      if [[ "${STATUS[1]}" =~ $(text 27)|$(text 28) ]] || [[ "$IS_ARGO" = 'is_argo' && "$NONINTERACTIVE_INSTALL" = 'noninteractive_install' ]]; then
+        SHADOWROCKET_SUBSCRIBE+="
 ----------------------------
-vless://$(echo -n "auto:${UUID[18]}@${VLESS_CDN_HOST}:${VLESS_CDN_PORT}" | base64 -w0)?remarks=${NODE_NAME[18]// /%20}%20${NODE_TAG[7]}&obfsParam=$ARGO_DOMAIN&path=/$VLESS_WS_PATH?ed=2560&obfs=websocket&tls=1&peer=$ARGO_DOMAIN
+vless://$(echo -n "auto:${UUID[18]}@${VLESS_CDN_HOST}:${VLESS_CDN_PORT}" | base64 -w0)?remarks=${STACK_NAME_PREFIX}${NODE_NAME[18]// /%20}%20${NODE_TAG[7]}&obfsParam=$ARGO_DOMAIN&path=/$VLESS_WS_PATH?ed=2560&obfs=websocket&tls=1&peer=$ARGO_DOMAIN
 "
-      [ "$ARGO_TYPE" = 'is_token_argo' ] && SHADOWROCKET_SUBSCRIBE+="
+        [ "$ARGO_TYPE" = 'is_token_argo' ] && SHADOWROCKET_SUBSCRIBE+="
   # $(text 94)
 "
-    else
-      WS_SERVER_IP_SHOW=${WS_SERVER_IP[18]} && TYPE_HOST_DOMAIN=$VLESS_HOST_DOMAIN && TYPE_PORT_WS=$PORT_VLESS_WS && local SHADOWROCKET_SUBSCRIBE+="
+      else
+        local WS_SERVER_IP_SHOW=${WS_SERVER_IP[18]} && local TYPE_HOST_DOMAIN=$VLESS_HOST_DOMAIN && local TYPE_PORT_WS=$PORT_VLESS_WS &&
+        SHADOWROCKET_SUBSCRIBE+="
 ----------------------------
-vless://$(echo -n "auto:${UUID[18]}@${VLESS_CDN_HOST}:${VLESS_CDN_PORT}" | base64 -w0)?remarks=${NODE_NAME[18]// /%20}%20${NODE_TAG[7]}&obfsParam=$VLESS_HOST_DOMAIN&path=/$VLESS_WS_PATH?ed=2560&obfs=websocket&tls=1&peer=$VLESS_HOST_DOMAIN
+vless://$(echo -n "auto:${UUID[18]}@${VLESS_CDN_HOST}:${VLESS_CDN_PORT}" | base64 -w0)?remarks=${STACK_NAME_PREFIX}${NODE_NAME[18]// /%20}%20${NODE_TAG[7]}&obfsParam=$VLESS_HOST_DOMAIN&path=/$VLESS_WS_PATH?ed=2560&obfs=websocket&tls=1&peer=$VLESS_HOST_DOMAIN
 
 # $(text 52)
 "
+      fi
     fi
-  fi
 
-  [ -n "$PORT_H2_REALITY" ] && local SHADOWROCKET_SUBSCRIBE+="
+    [ -n "$PORT_H2_REALITY" ] && SHADOWROCKET_SUBSCRIBE+="
 ----------------------------
-vless://$(echo -n auto:${UUID[19]}@${SERVER_IP_2}:${PORT_H2_REALITY} | base64 -w0)?remarks=${NODE_NAME[19]// /%20}%20${NODE_TAG[8]}&path=/&obfs=h2&tls=1&peer=addons.mozilla.org&alpn=h2&mux=1&pbk=${REALITY_PUBLIC[19]}
+vless://$(echo -n auto:${UUID[19]}@${SERVER_IP_2}:${PORT_H2_REALITY} | base64 -w0)?remarks=${STACK_NAME_PREFIX}${NODE_NAME[19]// /%20}%20${NODE_TAG[8]}&path=/&obfs=h2&tls=1&peer=addons.mozilla.org&alpn=h2&mux=1&pbk=${REALITY_PUBLIC[19]}
 "
-  [ -n "$PORT_GRPC_REALITY" ] && local SHADOWROCKET_SUBSCRIBE+="
-vless://$(echo -n "auto:${UUID[20]}@${SERVER_IP_2}:${PORT_GRPC_REALITY}" | base64 -w0)?remarks=${NODE_NAME[20]// /%20}%20${NODE_TAG[9]}&path=grpc&obfs=grpc&tls=1&peer=addons.mozilla.org&pbk=${REALITY_PUBLIC[20]}
+    [ -n "$PORT_GRPC_REALITY" ] && SHADOWROCKET_SUBSCRIBE+="
+vless://$(echo -n "auto:${UUID[20]}@${SERVER_IP_2}:${PORT_GRPC_REALITY}" | base64 -w0)?remarks=${STACK_NAME_PREFIX}${NODE_NAME[20]// /%20}%20${NODE_TAG[9]}&path=grpc&obfs=grpc&tls=1&peer=addons.mozilla.org&pbk=${REALITY_PUBLIC[20]}
 "
-  [ -n "$PORT_ANYTLS" ] && local SHADOWROCKET_SUBSCRIBE+="
-anytls://${UUID[21]}@${SERVER_IP_1}:${PORT_ANYTLS}?peer=${TLS_SERVER}&udp=1${SHADOWROCKET_HPKP}#${NODE_NAME[21]// /%20}%20${NODE_TAG[10]}
+    [ -n "$PORT_ANYTLS" ] && SHADOWROCKET_SUBSCRIBE+="
+anytls://${UUID[21]}@${SERVER_IP_1}:${PORT_ANYTLS}?peer=${TLS_SERVER}&udp=1${SHADOWROCKET_HPKP}#${STACK_NAME_PREFIX}${NODE_NAME[21]// /%20}%20${NODE_TAG[10]}
 "
-  [ -n "$PORT_NAIVE" ] && local SHADOWROCKET_SUBSCRIBE+="
-http2://$(echo -n "${UUID[22]}:${UUID[22]}@${NAIVE_SERVER:-$SERVER_IP_2}:${PORT_NAIVE}" | base64 -w0)?peer=${NAIVE_SNI:-$TLS_SERVER}&alpn=h2,http/1.1&padding=1&uot=2${SHADOWROCKET_HPKP_200}#${NODE_NAME[22]// /%20}%20${NODE_TAG[11]}%20http2
+    [ -n "$PORT_NAIVE" ] && SHADOWROCKET_SUBSCRIBE+="
+http2://$(echo -n "${UUID[22]}:${UUID[22]}@${CURR_NAIVE_SERVER_2}:${PORT_NAIVE}" | base64 -w0)?peer=${NAIVE_SNI:-$TLS_SERVER}&alpn=h2,http/1.1&padding=1&uot=2${SHADOWROCKET_HPKP_200}#${STACK_NAME_PREFIX}${NODE_NAME[22]// /%20}%20${NODE_TAG[11]}%20http2
 
-http3://$(echo -n "${UUID[22]}:${UUID[22]}@${NAIVE_SERVER:-$SERVER_IP_2}:${PORT_NAIVE}" | base64 -w0)?peer=${NAIVE_SNI:-$TLS_SERVER}&alpn=h3&padding=1${SHADOWROCKET_HPKP_200}#${NODE_NAME[22]// /%20}%20${NODE_TAG[11]}%20http3
+http3://$(echo -n "${UUID[22]}:${UUID[22]}@${CURR_NAIVE_SERVER_2}:${PORT_NAIVE}" | base64 -w0)?peer=${NAIVE_SNI:-$TLS_SERVER}&alpn=h3&padding=1${SHADOWROCKET_HPKP_200}#${STACK_NAME_PREFIX}${NODE_NAME[22]// /%20}%20${NODE_TAG[11]}%20http3
 "
+  done
   echo -n "$SHADOWROCKET_SUBSCRIBE" | sed -E '/^[ ]*#|^--/d' | sed '/^$/d' | base64 -w0 > ${WORK_DIR}/subscribe/shadowrocket
 
   # 生成 V2rayN 订阅文件
-  [ -n "$PORT_XTLS_REALITY" ] && local V2RAYN_SUBSCRIBE+="
-----------------------------
-vless://${UUID[11]}@${SERVER_IP_1}:${PORT_XTLS_REALITY}?encryption=none${VISION_FLOW}&security=reality&sni=addons.mozilla.org&fp=${FINGER_PRINT}&pbk=${REALITY_PUBLIC[11]}&type=tcp&headerType=none#${NODE_NAME[11]// /%20}%20${NODE_TAG[0]}"
+  local V2RAYN_SUBSCRIBE=""
+  for STACK in "${STACKS[@]}"; do
+    local STACK_PREFIX=""
+    local STACK_NAME_PREFIX=""
+    local CURR_IP="$SERVER_IP"
+    local SERVER_IP_1="$SERVER_IP"
+    if [ "$STACK" = "ipv4" ]; then
+      STACK_PREFIX="IPv4 "
+      STACK_NAME_PREFIX="IPv4%20"
+      CURR_IP="$WAN4"
+      SERVER_IP_1="$WAN4"
+    elif [ "$STACK" = "ipv6" ]; then
+      STACK_PREFIX=""
+      STACK_NAME_PREFIX=""
+      CURR_IP="$WAN6"
+      SERVER_IP_1="[$WAN6]"
+    else
+      if [[ "$CURR_IP" =~ : ]]; then
+        SERVER_IP_1="[$CURR_IP]"
+      fi
+    fi
 
-  if [ -n "$PORT_HYSTERIA2" ]; then
-    [[ -n "$PORT_HOPPING_START" && -n "$PORT_HOPPING_END" ]] && local HOPPING_PARAMS=",\"Ports\":\"${PORT_HOPPING_START}-${PORT_HOPPING_END}\",\"HopInterval\":\"30s\""
-    local REALM_PARAMS=""
-    [ "$IS_HY2_REALM" = 'is_hy2_realm' ] && REALM_PARAMS="\"Hy2RealmUrl\":\"realm://public@realm.hy2.io:443/${UUID[12]}?stun=stun.nextcloud.com:3478&stun=stun.sip.us:3478&stun=turn.cloudflare.com:3478&stun=global.stun.twilio.com:3478\","
-    local V2RAYN_SUBSCRIBE+="
-----------------------------
-v2rayn://hysteria2/$(echo -n "{\"ConfigType\":7,\"ConfigVersion\":4,\"Remarks\":\"${NODE_NAME[12]} ${NODE_TAG[1]}\",\"Address\":\"${SERVER_IP}\",\"Port\":${PORT_HYSTERIA2},\"Password\":\"${UUID[12]}\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${TLS_SERVER}\"${V2RAYN_CERT_JSON},\"ProtoExtraObj\":{"${REALM_PARAMS}"\"UpMbps\":${HY2_UP:-200},\"DownMbps\":${HY2_DOWN:-1000}}}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
-  fi
+    local CURR_NAIVE_SERVER="${NAIVE_SERVER}"
+    [ "$IS_NAIVE_COMMERCIAL" = "false" ] && CURR_NAIVE_SERVER="${CURR_IP}"
 
-  [ -n "$PORT_TUIC" ] && local V2RAYN_SUBSCRIBE+="
+    [ -n "$PORT_XTLS_REALITY" ] && V2RAYN_SUBSCRIBE+="
 ----------------------------
-v2rayn://tuic/$(echo -n "{\"ConfigType\":8,\"CoreType\":24,\"ConfigVersion\":4,\"Remarks\":\"${NODE_NAME[13]} ${NODE_TAG[2]}\",\"Address\":\"${SERVER_IP}\",\"Port\":${PORT_TUIC},\"Password\":\"${TUIC_PASSWORD}\",\"Username\":\"${UUID[13]}\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${TLS_SERVER}\",\"Alpn\":\"h3\"${V2RAYN_CERT_JSON},\"ProtoExtraObj\":{\"CongestionControl\":\"bbr\"}}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
+vless://${UUID[11]}@${SERVER_IP_1}:${PORT_XTLS_REALITY}?encryption=none${VISION_FLOW}&security=reality&sni=addons.mozilla.org&fp=${FINGER_PRINT}&pbk=${REALITY_PUBLIC[11]}&type=tcp&headerType=none#${STACK_NAME_PREFIX}${NODE_NAME[11]// /%20}%20${NODE_TAG[0]}"
 
-  [ -n "$PORT_SHADOWTLS" ] && local V2RAYN_SUBSCRIBE+="
+    if [ -n "$PORT_HYSTERIA2" ]; then
+      local HOPPING_PARAMS=""
+      [[ -n "$PORT_HOPPING_START" && -n "$PORT_HOPPING_END" ]] && HOPPING_PARAMS=",\"Ports\":\"${PORT_HOPPING_START}-${PORT_HOPPING_END}\",\"HopInterval\":\"30s\""
+      local REALM_PARAMS=""
+      [ "$IS_HY2_REALM" = 'is_hy2_realm' ] && REALM_PARAMS="\"Hy2RealmUrl\":\"realm://public@realm.hy2.io:443/${UUID[12]}?stun=stun.nextcloud.com:3478&stun=stun.sip.us:3478&stun=turn.cloudflare.com:3478&stun=global.stun.twilio.com:3478\","
+      V2RAYN_SUBSCRIBE+="
+----------------------------
+v2rayn://hysteria2/$(echo -n "{\"ConfigType\":7,\"ConfigVersion\":4,\"Remarks\":\"${STACK_PREFIX}${NODE_NAME[12]} ${NODE_TAG[1]}\",\"Address\":\"${CURR_IP}\",\"Port\":${PORT_HYSTERIA2},\"Password\":\"${UUID[12]}\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${TLS_SERVER}\"${V2RAYN_CERT_JSON},\"ProtoExtraObj\":{"${REALM_PARAMS}"\"UpMbps\":${HY2_UP:-200},\"DownMbps\":${HY2_DOWN:-1000}}}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
+    fi
+
+    [ -n "$PORT_TUIC" ] && V2RAYN_SUBSCRIBE+="
+----------------------------
+v2rayn://tuic/$(echo -n "{\"ConfigType\":8,\"CoreType\":24,\"ConfigVersion\":4,\"Remarks\":\"${STACK_PREFIX}${NODE_NAME[13]} ${NODE_TAG[2]}\",\"Address\":\"${CURR_IP}\",\"Port\":${PORT_TUIC},\"Password\":\"${TUIC_PASSWORD}\",\"Username\":\"${UUID[13]}\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${TLS_SERVER}\",\"Alpn\":\"h3\"${V2RAYN_CERT_JSON},\"ProtoExtraObj\":{\"CongestionControl\":\"bbr\"}}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
+
+    [ -n "$PORT_SHADOWTLS" ] && V2RAYN_SUBSCRIBE+="
 ----------------------------
 {
     \"log\": {
@@ -5540,7 +5708,7 @@ v2rayn://tuic/$(echo -n "{\"ConfigType\":8,\"CoreType\":24,\"ConfigVersion\":4,\
         {
             \"listen\": \"127.0.0.1\",
             \"listen_port\": ${PORT_SHADOWTLS},
-            \"tag\": \"${PROTOCOL_LIST[3]}\",
+            \"tag\": \"${STACK_PREFIX}${PROTOCOL_LIST[3]}\",
             \"type\": \"mixed\"
         }
     ],
@@ -5561,7 +5729,7 @@ v2rayn://tuic/$(echo -n "{\"ConfigType\":8,\"CoreType\":24,\"ConfigVersion\":4,\
         },
         {
             \"password\": \"${UUID[14]}\",
-            \"server\": \"${SERVER_IP}\",
+            \"server\": \"${CURR_IP}\",
             \"server_port\": ${PORT_SHADOWTLS},
             \"tag\": \"shadowtls-out\",
             \"tls\": {
@@ -5577,256 +5745,342 @@ v2rayn://tuic/$(echo -n "{\"ConfigType\":8,\"CoreType\":24,\"ConfigVersion\":4,\
         }
     ]
 }"
-  [ -n "$PORT_SHADOWSOCKS" ] && local V2RAYN_SUBSCRIBE+="
-----------------------------
-ss://$(echo -n "${SHADOWSOCKS_METHOD}:${SHADOWSOCKS_PASSWORD}@${SERVER_IP_1}:$PORT_SHADOWSOCKS" | base64 -w0)#${NODE_NAME[15]// /%20}%20${NODE_TAG[4]}"
 
-  [ -n "$PORT_TROJAN" ] && local V2RAYN_SUBSCRIBE+="
+    [ -n "$PORT_SHADOWSOCKS" ] && V2RAYN_SUBSCRIBE+="
 ----------------------------
-v2rayn://trojan/$(echo -n "{\"ConfigType\":6,\"ConfigVersion\":4,\"Remarks\":\"${NODE_NAME[16]} ${NODE_TAG[5]}\",\"Address\":\"${SERVER_IP}\",\"Port\":${PORT_TROJAN},\"Password\":\"${TROJAN_PASSWORD}\",\"Network\":\"raw\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${TLS_SERVER}\"${V2RAYN_CERT_JSON}}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
+ss://$(echo -n "${SHADOWSOCKS_METHOD}:${SHADOWSOCKS_PASSWORD}@${SERVER_IP_1}:$PORT_SHADOWSOCKS" | base64 -w0)#${STACK_NAME_PREFIX}${NODE_NAME[15]// /%20}%20${NODE_TAG[4]}"
 
- if [ -n "$PORT_VMESS_WS" ]; then
-    local VMESS_CDN_PORT=${CDN_PORT[17]:-80}
-    local VMESS_CDN_HOST=$(format_uri_host "${CDN[17]}")
-     if [[ "${STATUS[1]}" =~ $(text 27)|$(text 28) ]] || [[ "$IS_ARGO" = 'is_argo' && "$NONINTERACTIVE_INSTALL" = 'noninteractive_install' ]]; then
-      local V2RAYN_SUBSCRIBE+="
+    [ -n "$PORT_TROJAN" ] && V2RAYN_SUBSCRIBE+="
 ----------------------------
-vmess://$(echo -n "{ \"v\": \"2\", \"ps\": \"${NODE_NAME[17]} ${NODE_TAG[6]}\", \"add\": \"${VMESS_CDN_HOST}\", \"port\": \"${VMESS_CDN_PORT}\", \"id\": \"${UUID[17]}\", \"aid\": \"0\", \"scy\": \"none\", \"net\": \"ws\", \"type\": \"auto\", \"host\": \"$ARGO_DOMAIN\", \"path\": \"/$VMESS_WS_PATH\", \"tls\": \"\", \"sni\": \"\", \"alpn\": \"\" }" | base64 -w0)"
-      [ "$ARGO_TYPE" = 'is_token_argo' ] && V2RAYN_SUBSCRIBE+="
+v2rayn://trojan/$(echo -n "{\"ConfigType\":6,\"ConfigVersion\":4,\"Remarks\":\"${STACK_PREFIX}${NODE_NAME[16]} ${NODE_TAG[5]}\",\"Address\":\"${CURR_IP}\",\"Port\":${PORT_TROJAN},\"Password\":\"${TROJAN_PASSWORD}\",\"Network\":\"raw\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${TLS_SERVER}\"${V2RAYN_CERT_JSON}}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
+
+    if [ -n "$PORT_VMESS_WS" ]; then
+      local VMESS_CDN_PORT=${CDN_PORT[17]:-80}
+      local CURR_VMESS_CDN="${CDN[17]}"
+      if [ "$STACK" = "ipv4" ]; then
+        [[ "$CURR_VMESS_CDN" =~ : ]] && CURR_VMESS_CDN="104.17.78.30"
+      elif [ "$STACK" = "ipv6" ]; then
+        [[ -n "$CURR_VMESS_CDN" && ! "$CURR_VMESS_CDN" =~ : && "$CURR_VMESS_CDN" =~ ^[0-9.]+$ ]] && CURR_VMESS_CDN="2606:4700:9ad0:bd57:def6:e9ce:cc72:2ff6"
+      fi
+      local VMESS_CDN_HOST=$(format_uri_host "${CURR_VMESS_CDN}")
+      if [[ "${STATUS[1]}" =~ $(text 27)|$(text 28) ]] || [[ "$IS_ARGO" = 'is_argo' && "$NONINTERACTIVE_INSTALL" = 'noninteractive_install' ]]; then
+        V2RAYN_SUBSCRIBE+="
+----------------------------
+vmess://$(echo -n "{ \"v\": \"2\", \"ps\": \"${STACK_PREFIX}${NODE_NAME[17]} ${NODE_TAG[6]}\", \"add\": \"${VMESS_CDN_HOST}\", \"port\": \"${VMESS_CDN_PORT}\", \"id\": \"${UUID[17]}\", \"aid\": \"0\", \"scy\": \"none\", \"net\": \"ws\", \"type\": \"auto\", \"host\": \"$ARGO_DOMAIN\", \"path\": \"/$VMESS_WS_PATH\", \"tls\": \"\", \"sni\": \"\", \"alpn\": \"\" }" | base64 -w0)"
+        [ "$ARGO_TYPE" = 'is_token_argo' ] && V2RAYN_SUBSCRIBE+="
 
   # $(text 94)
 "
-    else
-      WS_SERVER_IP_SHOW=${WS_SERVER_IP[17]} && TYPE_HOST_DOMAIN=$VMESS_HOST_DOMAIN && TYPE_PORT_WS=$PORT_VMESS_WS && local V2RAYN_SUBSCRIBE+="
+      else
+        local WS_SERVER_IP_SHOW=${WS_SERVER_IP[17]} && local TYPE_HOST_DOMAIN=$VMESS_HOST_DOMAIN && local TYPE_PORT_WS=$PORT_VMESS_WS &&
+        V2RAYN_SUBSCRIBE+="
 ----------------------------
-vmess://$(echo -n "{ \"v\": \"2\", \"ps\": \"${NODE_NAME[17]} ${NODE_TAG[6]}\", \"add\": \"${VMESS_CDN_HOST}\", \"port\": \"${VMESS_CDN_PORT}\", \"id\": \"${UUID[17]}\", \"aid\": \"0\", \"scy\": \"none\", \"net\": \"ws\", \"type\": \"auto\", \"host\": \"$VMESS_HOST_DOMAIN\", \"path\": \"/$VMESS_WS_PATH\", \"tls\": \"\", \"sni\": \"\", \"alpn\": \"\" }" | base64 -w0)
+vmess://$(echo -n "{ \"v\": \"2\", \"ps\": \"${STACK_PREFIX}${NODE_NAME[17]} ${NODE_TAG[6]}\", \"add\": \"${VMESS_CDN_HOST}\", \"port\": \"${VMESS_CDN_PORT}\", \"id\": \"${UUID[17]}\", \"aid\": \"0\", \"scy\": \"none\", \"net\": \"ws\", \"type\": \"auto\", \"host\": \"$VMESS_HOST_DOMAIN\", \"path\": \"/$VMESS_WS_PATH\", \"tls\": \"\", \"sni\": \"\", \"alpn\": \"\" }" | base64 -w0)
 
 # $(text 52)"
+      fi
     fi
-  fi
 
-  if [ -n "$PORT_VLESS_WS" ]; then
-    local VLESS_CDN_PORT=${CDN_PORT[18]:-443}
-    local VLESS_CDN_HOST=$(format_uri_host "${CDN[18]}")
-     if [[ "${STATUS[1]}" =~ $(text 27)|$(text 28) ]] || [[ "$IS_ARGO" = 'is_argo' && "$NONINTERACTIVE_INSTALL" = 'noninteractive_install' ]]; then
-      local V2RAYN_SUBSCRIBE+="
+    if [ -n "$PORT_VLESS_WS" ]; then
+      local VLESS_CDN_PORT=${CDN_PORT[18]:-443}
+      local CURR_VLESS_CDN="${CDN[18]}"
+      if [ "$STACK" = "ipv4" ]; then
+        [[ "$CURR_VLESS_CDN" =~ : ]] && CURR_VLESS_CDN="104.17.78.30"
+      elif [ "$STACK" = "ipv6" ]; then
+        [[ -n "$CURR_VLESS_CDN" && ! "$CURR_VLESS_CDN" =~ : && "$CURR_VLESS_CDN" =~ ^[0-9.]+$ ]] && CURR_VLESS_CDN="2606:4700:9ad0:bd57:def6:e9ce:cc72:2ff6"
+      fi
+      local VLESS_CDN_HOST=$(format_uri_host "${CURR_VLESS_CDN}")
+      if [[ "${STATUS[1]}" =~ $(text 27)|$(text 28) ]] || [[ "$IS_ARGO" = 'is_argo' && "$NONINTERACTIVE_INSTALL" = 'noninteractive_install' ]]; then
+        V2RAYN_SUBSCRIBE+="
 ----------------------------
-vless://${UUID[18]}@${VLESS_CDN_HOST}:${VLESS_CDN_PORT}?encryption=none&security=tls&sni=$ARGO_DOMAIN&type=ws&host=$ARGO_DOMAIN&path=%2F$VLESS_WS_PATH%3Fed%3D2560#${NODE_NAME[18]// /%20}%20${NODE_TAG[7]}"
-      [ "$ARGO_TYPE" = 'is_token_argo' ] && V2RAYN_SUBSCRIBE+="
+vless://${UUID[18]}@${VLESS_CDN_HOST}:${VLESS_CDN_PORT}?encryption=none&security=tls&sni=$ARGO_DOMAIN&type=ws&host=$ARGO_DOMAIN&path=%2F$VLESS_WS_PATH%3Fed%3D2560#${STACK_NAME_PREFIX}${NODE_NAME[18]// /%20}%20${NODE_TAG[7]}"
+        [ "$ARGO_TYPE" = 'is_token_argo' ] && V2RAYN_SUBSCRIBE+="
 
   # $(text 94)
 "
-    else
-      WS_SERVER_IP_SHOW=${WS_SERVER_IP[18]} && TYPE_HOST_DOMAIN=$VLESS_HOST_DOMAIN && TYPE_PORT_WS=$PORT_VLESS_WS && local V2RAYN_SUBSCRIBE+="
+      else
+        local WS_SERVER_IP_SHOW=${WS_SERVER_IP[18]} && local TYPE_HOST_DOMAIN=$VLESS_HOST_DOMAIN && local TYPE_PORT_WS=$PORT_VLESS_WS &&
+        V2RAYN_SUBSCRIBE+="
 ----------------------------
-vless://${UUID[18]}@${VLESS_CDN_HOST}:${VLESS_CDN_PORT}?encryption=none&security=tls&sni=$VLESS_HOST_DOMAIN&type=ws&host=$VLESS_HOST_DOMAIN&path=%2F$VLESS_WS_PATH%3Fed%3D2560#${NODE_NAME[18]// /%20}%20${NODE_TAG[7]}
+vless://${UUID[18]}@${VLESS_CDN_HOST}:${VLESS_CDN_PORT}?encryption=none&security=tls&sni=$VLESS_HOST_DOMAIN&type=ws&host=$VLESS_HOST_DOMAIN&path=%2F$VLESS_WS_PATH%3Fed%3D2560#${STACK_NAME_PREFIX}${NODE_NAME[18]// /%20}%20${NODE_TAG[7]}
 
 # $(text 52)"
+      fi
     fi
-  fi
 
-  [ -n "$PORT_H2_REALITY" ] && local V2RAYN_SUBSCRIBE+="
+    [ -n "$PORT_H2_REALITY" ] && V2RAYN_SUBSCRIBE+="
 ----------------------------
-v2rayn://vless/$(echo -n "{\"ConfigType\":5,\"CoreType\":24,\"ConfigVersion\":4,\"Remarks\":\"${NODE_NAME[19]} ${NODE_TAG[8]}\",\"Address\":\"${SERVER_IP}\",\"Port\":${PORT_H2_REALITY},\"Password\":\"${UUID[19]}\",\"Network\":\"raw\",\"StreamSecurity\":\"reality\",\"AllowInsecure\":\"false\",\"Sni\":\"addons.mozilla.org\",\"Fingerprint\":\"${FINGER_PRINT}\",\"PublicKey\":\"${REALITY_PUBLIC[19]}\"}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
+v2rayn://vless/$(echo -n "{\"ConfigType\":5,\"CoreType\":24,\"ConfigVersion\":4,\"Remarks\":\"${STACK_PREFIX}${NODE_NAME[19]} ${NODE_TAG[8]}\",\"Address\":\"${CURR_IP}\",\"Port\":${PORT_H2_REALITY},\"Password\":\"${UUID[19]}\",\"Network\":\"raw\",\"StreamSecurity\":\"reality\",\"AllowInsecure\":\"false\",\"Sni\":\"addons.mozilla.org\",\"Fingerprint\":\"${FINGER_PRINT}\",\"PublicKey\":\"${REALITY_PUBLIC[19]}\"}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
 
-  [ -n "$PORT_GRPC_REALITY" ] && local V2RAYN_SUBSCRIBE+="
+    [ -n "$PORT_GRPC_REALITY" ] && V2RAYN_SUBSCRIBE+="
 ----------------------------
-vless://${UUID[20]}@${SERVER_IP_1}:${PORT_GRPC_REALITY}?encryption=none&security=reality&sni=addons.mozilla.org&fp=${FINGER_PRINT}&pbk=${REALITY_PUBLIC[20]}&type=grpc&serviceName=grpc&mode=gun#${NODE_NAME[20]// /%20}%20${NODE_TAG[9]}"
+vless://${UUID[20]}@${SERVER_IP_1}:${PORT_GRPC_REALITY}?encryption=none&security=reality&sni=addons.mozilla.org&fp=${FINGER_PRINT}&pbk=${REALITY_PUBLIC[20]}&type=grpc&serviceName=grpc&mode=gun#${STACK_NAME_PREFIX}${NODE_NAME[20]// /%20}%20${NODE_TAG[9]}"
 
-  [ -n "$PORT_ANYTLS" ] && local V2RAYN_SUBSCRIBE+="
+    [ -n "$PORT_ANYTLS" ] && V2RAYN_SUBSCRIBE+="
 ----------------------------
-v2rayn://anytls/$(echo -n "{\"ConfigType\":11,\"CoreType\":24,\"ConfigVersion\":4,\"Remarks\":\"${NODE_NAME[21]} ${NODE_TAG[10]}\",\"Address\":\"${SERVER_IP}\",\"Port\":${PORT_ANYTLS},\"Password\":\"${UUID[21]}\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${TLS_SERVER}\",\"Fingerprint\":\"${FINGER_PRINT}\"${V2RAYN_CERT_JSON}}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
+v2rayn://anytls/$(echo -n "{\"ConfigType\":11,\"CoreType\":24,\"ConfigVersion\":4,\"Remarks\":\"${STACK_PREFIX}${NODE_NAME[21]} ${NODE_TAG[10]}\",\"Address\":\"${CURR_IP}\",\"Port\":${PORT_ANYTLS},\"Password\":\"${UUID[21]}\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${TLS_SERVER}\",\"Fingerprint\":\"${FINGER_PRINT}\"${V2RAYN_CERT_JSON}}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
 
-  [ -n "$PORT_NAIVE" ] && local V2RAYN_SUBSCRIBE+="
+    [ -n "$PORT_NAIVE" ] && V2RAYN_SUBSCRIBE+="
 ----------------------------
-v2rayn://naive/$(echo -n "{\"ConfigType\":12,\"CoreType\":24,\"ConfigVersion\":4,\"Remarks\":\"${NODE_NAME[22]} ${NODE_TAG[11]} http2\",\"Address\":\"${NAIVE_SERVER:-$SERVER_IP}\",\"Port\":${PORT_NAIVE},\"Password\":\"${UUID[22]}\",\"Username\":\"${UUID[22]}\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${NAIVE_SNI:-$TLS_SERVER}\"${V2RAYN_CERT_200_JSON}}" | base64 -w0 | tr '+/' '-_' | tr -d '=')
+v2rayn://naive/$(echo -n "{\"ConfigType\":12,\"CoreType\":24,\"ConfigVersion\":4,\"Remarks\":\"${STACK_PREFIX}${NODE_NAME[22]} ${NODE_TAG[11]} http2\",\"Address\":\"${CURR_NAIVE_SERVER}\",\"Port\":${PORT_NAIVE},\"Password\":\"${UUID[22]}\",\"Username\":\"${UUID[22]}\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${NAIVE_SNI:-$TLS_SERVER}\"${V2RAYN_CERT_200_JSON}}" | base64 -w0 | tr '+/' '-_' | tr -d '=')
 ----------------------------
-v2rayn://naive/$(echo -n "{\"ConfigType\":12,\"CoreType\":24,\"ConfigVersion\":4,\"Remarks\":\"${NODE_NAME[22]} ${NODE_TAG[11]} quic\",\"Address\":\"${NAIVE_SERVER:-$SERVER_IP}\",\"Port\":${PORT_NAIVE},\"Password\":\"${UUID[22]}\",\"Username\":\"${UUID[22]}\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${NAIVE_SNI:-$TLS_SERVER}\"${V2RAYN_CERT_200_JSON},\"ProtoExtraObj\":{\"CongestionControl\":\"bbr\",\"NaiveQuic\":true}}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
-
+v2rayn://naive/$(echo -n "{\"ConfigType\":12,\"CoreType\":24,\"ConfigVersion\":4,\"Remarks\":\"${STACK_PREFIX}${NODE_NAME[22]} ${NODE_TAG[11]} quic\",\"Address\":\"${CURR_NAIVE_SERVER}\",\"Port\":${PORT_NAIVE},\"Password\":\"${UUID[22]}\",\"Username\":\"${UUID[22]}\",\"StreamSecurity\":\"tls\",\"AllowInsecure\":\"false\",\"Sni\":\"${NAIVE_SNI:-$TLS_SERVER}\"${V2RAYN_CERT_200_JSON},\"ProtoExtraObj\":{\"CongestionControl\":\"bbr\",\"NaiveQuic\":true}}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
+  done
   echo -n "$V2RAYN_SUBSCRIBE" | sed '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/d' | sed -E '/^[ ]*#|^[ ]+|^\{|^\}/d' | sed '/^$/d' | base64 -w0 > ${WORK_DIR}/subscribe/v2rayn
 
   # 生成 Throne 订阅文件
-  [ -n "$PORT_XTLS_REALITY" ] && local THRONE_SUBSCRIBE+="
-----------------------------
-vless://${UUID[11]}@${SERVER_IP_1}:${PORT_XTLS_REALITY}?security=reality&sni=addons.mozilla.org&fp=${FINGER_PRINT}&pbk=${REALITY_PUBLIC[11]}&type=tcp${VISION_FLOW}&encryption=none#${NODE_NAME[11]// /%20}%20${NODE_TAG[0]}"
-
-  if [ -n "$PORT_HYSTERIA2" ]; then
-    local THRONE_PARAMS="allowInsecure=false&alpn&security=tls&sni=${TLS_SERVER}&upmbps=${HY2_UP}&downmbps=${HY2_DOWN}&security=tls${THRONE_CERT}"
-    if [[ -n "$PORT_HOPPING_START" && -n "$PORT_HOPPING_END" ]]; then
-      THRONE_PARAMS+="&mport=${PORT_HOPPING_START}-${PORT_HOPPING_END}&hop_interval=30s"
+  local THRONE_SUBSCRIBE=""
+  for STACK in "${STACKS[@]}"; do
+    local STACK_PREFIX=""
+    local STACK_NAME_PREFIX=""
+    local CURR_IP="$SERVER_IP"
+    local SERVER_IP_1="$SERVER_IP"
+    if [ "$STACK" = "ipv4" ]; then
+      STACK_PREFIX="IPv4 "
+      STACK_NAME_PREFIX="IPv4%20"
+      CURR_IP="$WAN4"
+      SERVER_IP_1="$WAN4"
+    elif [ "$STACK" = "ipv6" ]; then
+      STACK_PREFIX=""
+      STACK_NAME_PREFIX=""
+      CURR_IP="$WAN6"
+      SERVER_IP_1="[$WAN6]"
+    else
+      if [[ "$CURR_IP" =~ : ]]; then
+        SERVER_IP_1="[$CURR_IP]"
+      fi
     fi
-    local THRONE_SUBSCRIBE+="
-----------------------------
-hysteria2://${UUID[12]}@${SERVER_IP_1}:${PORT_HYSTERIA2}?${THRONE_PARAMS}#${NODE_NAME[12]// /%20}%20${NODE_TAG[1]}"
-  fi
 
-  [ -n "$PORT_TUIC" ] && local THRONE_SUBSCRIBE+="
-----------------------------
-tuic://${TUIC_PASSWORD}:${UUID[13]}@${SERVER_IP_1}:${PORT_TUIC}?congestion_control=$TUIC_CONGESTION_CONTROL&alpn=h3&sni=${TLS_SERVER}&udp_relay_mode=native&allow_insecure=0&security=tls${THRONE_CERT}#${NODE_NAME[13]// /%20}%20${NODE_TAG[2]}"
-  [ -n "$PORT_SHADOWTLS" ] && local THRONE_SUBSCRIBE+="
-----------------------------
-shadowtls://:${UUID[14]}@${SERVER_IP_1}:${PORT_SHADOWTLS}?version=3&security=tls&sni=${TLS_SERVER}&fp=chrome#1-tls-not-use
+    local CURR_NAIVE_SERVER_1="${NAIVE_SERVER}"
+    [ "$IS_NAIVE_COMMERCIAL" = "false" ] && CURR_NAIVE_SERVER_1="${SERVER_IP_1}"
+    [[ "$CURR_NAIVE_SERVER_1" =~ : && ! "$CURR_NAIVE_SERVER_1" =~ ^\[ ]] && CURR_NAIVE_SERVER_1="[${CURR_NAIVE_SERVER_1}]"
 
-ss://${SHADOWTLS_METHOD}:${SHADOWTLS_PASSWORD}@127.0.0.1:0#2-ss-not-use"
-
-  [ -n "$PORT_SHADOWSOCKS" ] && local THRONE_SUBSCRIBE+="
+    [ -n "$PORT_XTLS_REALITY" ] && THRONE_SUBSCRIBE+="
 ----------------------------
-ss://$(echo -n "${SHADOWSOCKS_METHOD}:${SHADOWSOCKS_PASSWORD}" | base64 -w0)@${SERVER_IP_1}:$PORT_SHADOWSOCKS#${NODE_NAME[15]// /%20}%20${NODE_TAG[4]}"
+vless://${UUID[11]}@${SERVER_IP_1}:${PORT_XTLS_REALITY}?security=reality&sni=addons.mozilla.org&fp=${FINGER_PRINT}&pbk=${REALITY_PUBLIC[11]}&type=tcp${VISION_FLOW}&encryption=none#${STACK_NAME_PREFIX}${NODE_NAME[11]// /%20}%20${NODE_TAG[0]}"
 
-  [ -n "$PORT_TROJAN" ] && local THRONE_SUBSCRIBE+="
-----------------------------
-trojan://${TROJAN_PASSWORD}@${SERVER_IP_1}:$PORT_TROJAN?security=tls&sni=${TLS_SERVER}&allowInsecure=0${THRONE_CERT}&fp=${FINGER_PRINT}&type=tcp#${NODE_NAME[16]// /%20}%20${NODE_TAG[5]}"
-
-  if [ -n "$PORT_VMESS_WS" ]; then
-     if [[ "${STATUS[1]}" =~ $(text 27)|$(text 28) ]] || [[ "$IS_ARGO" = 'is_argo' && "$NONINTERACTIVE_INSTALL" = 'noninteractive_install' ]]; then
+    if [ -n "$PORT_HYSTERIA2" ]; then
+      local THRONE_PARAMS="allowInsecure=false&alpn&security=tls&sni=${TLS_SERVER}&upmbps=${HY2_UP}&downmbps=${HY2_DOWN}&security=tls${THRONE_CERT}"
+      if [[ -n "$PORT_HOPPING_START" && -n "$PORT_HOPPING_END" ]]; then
+        THRONE_PARAMS+="&mport=${PORT_HOPPING_START}-${PORT_HOPPING_END}&hop_interval=30s"
+      fi
       THRONE_SUBSCRIBE+="
 ----------------------------
-vmess://$(echo -n "{\"add\":\"${CDN[17]}\",\"aid\":\"0\",\"host\":\"$ARGO_DOMAIN\",\"id\":\"${UUID[17]}\",\"net\":\"ws\",\"path\":\"/$VMESS_WS_PATH\",\"port\":\"80\",\"ps\":\"${NODE_NAME[17]} ${NODE_TAG[6]}\",\"scy\":\"auto\",\"sni\":\"\",\"tls\":\"\",\"type\":\"\",\"v\":\"2\"}" | base64 -w0)"
-      [ "$ARGO_TYPE" = 'is_token_argo' ] && THRONE_SUBSCRIBE+="
+hysteria2://${UUID[12]}@${SERVER_IP_1}:${PORT_HYSTERIA2}?${THRONE_PARAMS}#${STACK_NAME_PREFIX}${NODE_NAME[12]// /%20}%20${NODE_TAG[1]}"
+    fi
+
+    [ -n "$PORT_TUIC" ] && THRONE_SUBSCRIBE+="
+----------------------------
+tuic://${TUIC_PASSWORD}:${UUID[13]}@${SERVER_IP_1}:${PORT_TUIC}?congestion_control=$TUIC_CONGESTION_CONTROL&alpn=h3&sni=${TLS_SERVER}&udp_relay_mode=native&allow_insecure=0&security=tls${THRONE_CERT}#${STACK_NAME_PREFIX}${NODE_NAME[13]// /%20}%20${NODE_TAG[2]}"
+
+    [ -n "$PORT_SHADOWTLS" ] && THRONE_SUBSCRIBE+="
+----------------------------
+shadowtls://:${UUID[14]}@${SERVER_IP_1}:${PORT_SHADOWTLS}?version=3&security=tls&sni=${TLS_SERVER}&fp=chrome#${STACK_NAME_PREFIX}1-tls-not-use
+
+ss://${SHADOWTLS_METHOD}:${SHADOWTLS_PASSWORD}@127.0.0.1:0#${STACK_NAME_PREFIX}2-ss-not-use"
+
+    [ -n "$PORT_SHADOWSOCKS" ] && THRONE_SUBSCRIBE+="
+----------------------------
+ss://$(echo -n "${SHADOWSOCKS_METHOD}:${SHADOWSOCKS_PASSWORD}" | base64 -w0)@${SERVER_IP_1}:$PORT_SHADOWSOCKS#${STACK_NAME_PREFIX}${NODE_NAME[15]// /%20}%20${NODE_TAG[4]}"
+
+    [ -n "$PORT_TROJAN" ] && THRONE_SUBSCRIBE+="
+----------------------------
+trojan://${TROJAN_PASSWORD}@${SERVER_IP_1}:$PORT_TROJAN?security=tls&sni=${TLS_SERVER}&allowInsecure=0${THRONE_CERT}&fp=${FINGER_PRINT}&type=tcp#${STACK_NAME_PREFIX}${NODE_NAME[16]// /%20}%20${NODE_TAG[5]}"
+
+    if [ -n "$PORT_VMESS_WS" ]; then
+      local CURR_VMESS_CDN="${CDN[17]}"
+      if [ "$STACK" = "ipv4" ]; then
+        [[ "$CURR_VMESS_CDN" =~ : ]] && CURR_VMESS_CDN="104.17.78.30"
+      elif [ "$STACK" = "ipv6" ]; then
+        [[ -n "$CURR_VMESS_CDN" && ! "$CURR_VMESS_CDN" =~ : && "$CURR_VMESS_CDN" =~ ^[0-9.]+$ ]] && CURR_VMESS_CDN="2606:4700:9ad0:bd57:def6:e9ce:cc72:2ff6"
+      fi
+      if [[ "${STATUS[1]}" =~ $(text 27)|$(text 28) ]] || [[ "$IS_ARGO" = 'is_argo' && "$NONINTERACTIVE_INSTALL" = 'noninteractive_install' ]]; then
+        THRONE_SUBSCRIBE+="
+----------------------------
+vmess://$(echo -n "{\"add\":\"${CURR_VMESS_CDN}\",\"aid\":\"0\",\"host\":\"$ARGO_DOMAIN\",\"id\":\"${UUID[17]}\",\"net\":\"ws\",\"path\":\"/$VMESS_WS_PATH\",\"port\":\"80\",\"ps\":\"${STACK_PREFIX}${NODE_NAME[17]} ${NODE_TAG[6]}\",\"scy\":\"auto\",\"sni\":\"\",\"tls\":\"\",\"type\":\"\",\"v\":\"2\"}" | base64 -w0)"
+        [ "$ARGO_TYPE" = 'is_token_argo' ] && THRONE_SUBSCRIBE+="
 
   # $(text 94)
 "
-    else
-      WS_SERVER_IP_SHOW=${WS_SERVER_IP[17]} && TYPE_HOST_DOMAIN=$VMESS_HOST_DOMAIN && TYPE_PORT_WS=$PORT_VMESS_WS && local THRONE_SUBSCRIBE+="
+      else
+        local WS_SERVER_IP_SHOW=${WS_SERVER_IP[17]} && local TYPE_HOST_DOMAIN=$VMESS_HOST_DOMAIN && local TYPE_PORT_WS=$PORT_VMESS_WS &&
+        THRONE_SUBSCRIBE+="
 ----------------------------
-vmess://$(echo -n "{\"add\":\"${CDN[17]}\",\"aid\":\"0\",\"host\":\"$VMESS_HOST_DOMAIN\",\"id\":\"${UUID[17]}\",\"net\":\"ws\",\"path\":\"/$VMESS_WS_PATH\",\"port\":\"80\",\"ps\":\"${NODE_NAME[17]} ${NODE_TAG[6]}\",\"scy\":\"auto\",\"sni\":\"\",\"tls\":\"\",\"type\":\"\",\"v\":\"2\"}" | base64 -w0)
+vmess://$(echo -n "{\"add\":\"${CURR_VMESS_CDN}\",\"aid\":\"0\",\"host\":\"$VMESS_HOST_DOMAIN\",\"id\":\"${UUID[17]}\",\"net\":\"ws\",\"path\":\"/$VMESS_WS_PATH\",\"port\":\"80\",\"ps\":\"${STACK_PREFIX}${NODE_NAME[17]} ${NODE_TAG[6]}\",\"scy\":\"auto\",\"sni\":\"\",\"tls\":\"\",\"type\":\"\",\"v\":\"2\"}" | base64 -w0)
 
 # $(text 52)"
+      fi
     fi
-  fi
 
-  if [ -n "$PORT_VLESS_WS" ]; then
-    local VLESS_CDN_PORT=${CDN_PORT[18]:-443}
-    local VLESS_CDN_HOST=$(format_uri_host "${CDN[18]}")
-     if [[ "${STATUS[1]}" =~ $(text 27)|$(text 28) ]] || [[ "$IS_ARGO" = 'is_argo' && "$NONINTERACTIVE_INSTALL" = 'noninteractive_install' ]]; then
-      local THRONE_SUBSCRIBE+="
+    if [ -n "$PORT_VLESS_WS" ]; then
+      local VLESS_CDN_PORT=${CDN_PORT[18]:-443}
+      local CURR_VLESS_CDN="${CDN[18]}"
+      if [ "$STACK" = "ipv4" ]; then
+        [[ "$CURR_VLESS_CDN" =~ : ]] && CURR_VLESS_CDN="104.17.78.30"
+      elif [ "$STACK" = "ipv6" ]; then
+        [[ -n "$CURR_VLESS_CDN" && ! "$CURR_VLESS_CDN" =~ : && "$CURR_VLESS_CDN" =~ ^[0-9.]+$ ]] && CURR_VLESS_CDN="2606:4700:9ad0:bd57:def6:e9ce:cc72:2ff6"
+      fi
+      local VLESS_CDN_HOST=$(format_uri_host "${CURR_VLESS_CDN}")
+      if [[ "${STATUS[1]}" =~ $(text 27)|$(text 28) ]] || [[ "$IS_ARGO" = 'is_argo' && "$NONINTERACTIVE_INSTALL" = 'noninteractive_install' ]]; then
+        THRONE_SUBSCRIBE+="
 ----------------------------
-vless://${UUID[18]}@${VLESS_CDN_HOST}:${VLESS_CDN_PORT}?security=tls&sni=$ARGO_DOMAIN&type=ws&path=/$VLESS_WS_PATH?ed%3D2560&host=$ARGO_DOMAIN&encryption=none#${NODE_NAME[18]// /%20}%20${NODE_TAG[7]}"
-      [ "$ARGO_TYPE" = 'is_token_argo' ] && THRONE_SUBSCRIBE+="
+vless://${UUID[18]}@${VLESS_CDN_HOST}:${VLESS_CDN_PORT}?security=tls&sni=$ARGO_DOMAIN&type=ws&path=/$VLESS_WS_PATH?ed%3D2560&host=$ARGO_DOMAIN&encryption=none#${STACK_NAME_PREFIX}${NODE_NAME[18]// /%20}%20${NODE_TAG[7]}"
+        [ "$ARGO_TYPE" = 'is_token_argo' ] && THRONE_SUBSCRIBE+="
 
   # $(text 94)
 "
-    else
-      WS_SERVER_IP_SHOW=${WS_SERVER_IP[18]} && TYPE_HOST_DOMAIN=$VLESS_HOST_DOMAIN && TYPE_PORT_WS=$PORT_VLESS_WS && local THRONE_SUBSCRIBE+="
+      else
+        local WS_SERVER_IP_SHOW=${WS_SERVER_IP[18]} && local TYPE_HOST_DOMAIN=$VLESS_HOST_DOMAIN && local TYPE_PORT_WS=$PORT_VLESS_WS &&
+        THRONE_SUBSCRIBE+="
 ----------------------------
-vless://${UUID[18]}@${VLESS_CDN_HOST}:${VLESS_CDN_PORT}?security=tls&sni=$VLESS_HOST_DOMAIN&type=ws&path=/$VLESS_WS_PATH?ed%3D2560&host=$VLESS_HOST_DOMAIN&encryption=none#${NODE_NAME[18]// /%20}%20${NODE_TAG[7]}
+vless://${UUID[18]}@${VLESS_CDN_HOST}:${VLESS_CDN_PORT}?security=tls&sni=$VLESS_HOST_DOMAIN&type=ws&path=/$VLESS_WS_PATH?ed%3D2560&host=$VLESS_HOST_DOMAIN&encryption=none#${STACK_NAME_PREFIX}${NODE_NAME[18]// /%20}%20${NODE_TAG[7]}
 
 # $(text 52)"
+      fi
     fi
-  fi
 
-  [ -n "$PORT_H2_REALITY" ] && local THRONE_SUBSCRIBE+="
+    [ -n "$PORT_H2_REALITY" ] && THRONE_SUBSCRIBE+="
 ----------------------------
-vless://${UUID[19]}@${SERVER_IP_1}:${PORT_H2_REALITY}?security=reality&sni=addons.mozilla.org&alpn=h2&fp=${FINGER_PRINT}&pbk=${REALITY_PUBLIC[19]// /%20}&type=http&encryption=none#${NODE_NAME[19]// /%20}%20${NODE_TAG[8]}"
+vless://${UUID[19]}@${SERVER_IP_1}:${PORT_H2_REALITY}?security=reality&sni=addons.mozilla.org&alpn=h2&fp=${FINGER_PRINT}&pbk=${REALITY_PUBLIC[19]// /%20}&type=http&encryption=none#${STACK_NAME_PREFIX}${NODE_NAME[19]// /%20}%20${NODE_TAG[8]}"
 
-  [ -n "$PORT_GRPC_REALITY" ] && local THRONE_SUBSCRIBE+="
+    [ -n "$PORT_GRPC_REALITY" ] && THRONE_SUBSCRIBE+="
 ----------------------------
-vless://${UUID[20]}@${SERVER_IP_1}:${PORT_GRPC_REALITY}?security=reality&sni=addons.mozilla.org&fp=${FINGER_PRINT}&pbk=${REALITY_PUBLIC[20]// /%20}&type=grpc&serviceName=grpc&encryption=none#${NODE_NAME[20]// /%20}%20${NODE_TAG[9]}"
+vless://${UUID[20]}@${SERVER_IP_1}:${PORT_GRPC_REALITY}?security=reality&sni=addons.mozilla.org&fp=${FINGER_PRINT}&pbk=${REALITY_PUBLIC[20]// /%20}&type=grpc&serviceName=grpc&encryption=none#${STACK_NAME_PREFIX}${NODE_NAME[20]// /%20}%20${NODE_TAG[9]}"
 
-  [ -n "$PORT_ANYTLS" ] && local THRONE_SUBSCRIBE+="
+    [ -n "$PORT_ANYTLS" ] && THRONE_SUBSCRIBE+="
 ----------------------------
-anytls://${UUID[21]}@${SERVER_IP_1}:${PORT_ANYTLS}?idle_session_check_interval=30s&idle_session_timeout=30s&min_idle_session=5&insecure=0&security=tls&sni=${TLS_SERVER}&tls_certificate=${CERT_URL_1}&fp=${FINGER_PRINT}#${NODE_NAME[21]// /%20}%20${NODE_TAG[10]}"
+anytls://${UUID[21]}@${SERVER_IP_1}:${PORT_ANYTLS}?idle_session_check_interval=30s&idle_session_timeout=30s&min_idle_session=5&insecure=0&security=tls&sni=${TLS_SERVER}&tls_certificate=${CERT_URL_1}&fp=${FINGER_PRINT}#${STACK_NAME_PREFIX}${NODE_NAME[21]// /%20}%20${NODE_TAG[10]}"
 
-  [ -n "$PORT_NAIVE" ] && {
-    local THRONE_SUBSCRIBE+="
+    [ -n "$PORT_NAIVE" ] && {
+      THRONE_SUBSCRIBE+="
 ----------------------------
-naive+https://${UUID[22]}:${UUID[22]}@${NAIVE_SERVER:-$SERVER_IP_1}:${PORT_NAIVE}?uot=1&security=tls&sni=${NAIVE_SNI:-$TLS_SERVER}${THRONE_CERT_200}#${NODE_NAME[22]// /%20}%20${NODE_TAG[11]}%20http2
+naive+https://${UUID[22]}:${UUID[22]}@${CURR_NAIVE_SERVER_1}:${PORT_NAIVE}?uot=1&security=tls&sni=${NAIVE_SNI:-$TLS_SERVER}${THRONE_CERT_200}#${STACK_NAME_PREFIX}${NODE_NAME[22]// /%20}%20${NODE_TAG[11]}%20http2
 ----------------------------
-naive+quic://${UUID[22]}:${UUID[22]}@${NAIVE_SERVER:-$SERVER_IP_1}:${PORT_NAIVE}?congestion_control=bbr&security=tls&sni=${NAIVE_SNI:-$TLS_SERVER}${THRONE_CERT_200}#${NODE_NAME[22]// /%20}%20${NODE_TAG[11]}%20quic"
-  }
-
+naive+quic://${UUID[22]}:${UUID[22]}@${CURR_NAIVE_SERVER_1}:${PORT_NAIVE}?congestion_control=bbr&security=tls&sni=${NAIVE_SNI:-$TLS_SERVER}${THRONE_CERT_200}#${STACK_NAME_PREFIX}${NODE_NAME[22]// /%20}%20${NODE_TAG[11]}%20quic"
+    }
+  done
   echo -n "$THRONE_SUBSCRIBE" | sed -E '/^[ ]*#|^--/d' | sed '/^$/d' | base64 -w0 > ${WORK_DIR}/subscribe/throne
 
   # 生成 Sing-box 订阅文件
-  [ -n "$PORT_XTLS_REALITY" ] &&
-  local OUTBOUND_REPLACE+=" { \"type\": \"vless\", \"tag\": \"${NODE_NAME[11]} ${NODE_TAG[0]}\", \"server\":\"${SERVER_IP}\", \"server_port\":${PORT_XTLS_REALITY}, \"uuid\":\"${UUID[11]}\", \"flow\":\"${FLOW}\", \"tls\":{ \"enabled\":true, \"server_name\":\"addons.mozilla.org\", \"utls\":{ \"enabled\":true, \"fingerprint\":\"${FINGER_PRINT}\" }, \"reality\":{ \"enabled\":true, \"public_key\":\"${REALITY_PUBLIC[11]}\", \"short_id\":\"\" } }, \"multiplex\": { \"enabled\": ${MULTIPLEX_PADDING_ENABLED}, \"protocol\": \"h2mux\", \"max_connections\": 8, \"min_streams\": 16, \"padding\": ${MULTIPLEX_PADDING_ENABLED}, \"brutal\":{ \"enabled\":${VISION_BRUTAL_ENABLED}, \"up_mbps\":1000, \"down_mbps\":1000 } } }," &&
-  local NODE_REPLACE+="\"${NODE_NAME[11]} ${NODE_TAG[0]}\","
+  local OUTBOUND_REPLACE=""
+  local NODE_REPLACE=""
+  local PROMPT=""
 
-  if [ -n "$PORT_HYSTERIA2" ]; then
-    local HYSTERIA2_CONFIG=" { \"type\": \"hysteria2\", \"tag\": \"${NODE_NAME[12]} ${NODE_TAG[1]}\", \"server\": \"${SERVER_IP}\", \"server_port\": ${PORT_HYSTERIA2}, \"up_mbps\": ${HY2_UP}, \"down_mbps\": ${HY2_DOWN}, \"password\": \"${UUID[12]}\", \"tls\": { \"enabled\": true, \"server_name\": \"${TLS_SERVER}\", ${CERT_PINNING_JSON} \"alpn\": [ \"h3\" ] }"
-    if [ "$IS_HY2_REALM" = 'is_hy2_realm' ]; then
-      HY2_REALM_ID="${HY2_REALM_ID:-${UUID[12]}}"
-      HYSTERIA2_CONFIG+=", \"realm\": { \"server_url\": \"https://realm.hy2.io\", \"token\": \"public\", \"realm_id\": \"${HY2_REALM_ID}\", \"stun_servers\": [ \"turn.cloudflare.com:3478\", \"stun.nextcloud.com:3478\", \"stun.sip.us:3478\", \"global.stun.twilio.com:3478\" ] }"
+  for STACK in "${STACKS[@]}"; do
+    local STACK_PREFIX=""
+    local CURR_IP="$SERVER_IP"
+    if [ "$STACK" = "ipv4" ]; then
+      STACK_PREFIX="IPv4 "
+      CURR_IP="$WAN4"
+    elif [ "$STACK" = "ipv6" ]; then
+      STACK_PREFIX=""
+      CURR_IP="$WAN6"
     fi
-    HYSTERIA2_CONFIG+=" },"
-    if [[ -n "${PORT_HOPPING_START}" && -n "${PORT_HOPPING_END}" ]]; then
-      HYSTERIA2_CONFIG="${HYSTERIA2_CONFIG/\"server_port\": ${PORT_HYSTERIA2},/\"server_port\": ${PORT_HYSTERIA2}, \"server_ports\": [ \"${PORT_HOPPING_START}:${PORT_HOPPING_END}\" ], \"hop_interval\": \"30s\", \"hop_interval_max\": \"60s\",}"
+
+    local CURR_NAIVE_SERVER="${NAIVE_SERVER}"
+    [ "$IS_NAIVE_COMMERCIAL" = "false" ] && CURR_NAIVE_SERVER="${CURR_IP}"
+
+    [ -n "$PORT_XTLS_REALITY" ] &&
+    OUTBOUND_REPLACE+=" { \"type\": \"vless\", \"tag\": \"${STACK_PREFIX}${NODE_NAME[11]} ${NODE_TAG[0]}\", \"server\":\"${CURR_IP}\", \"server_port\":${PORT_XTLS_REALITY}, \"uuid\":\"${UUID[11]}\", \"flow\":\"${FLOW}\", \"tls\":{ \"enabled\":true, \"server_name\":\"addons.mozilla.org\", \"utls\":{ \"enabled\":true, \"fingerprint\":\"${FINGER_PRINT}\" }, \"reality\":{ \"enabled\":true, \"public_key\":\"${REALITY_PUBLIC[11]}\", \"short_id\":\"\" } }, \"multiplex\": { \"enabled\": ${MULTIPLEX_PADDING_ENABLED}, \"protocol\": \"h2mux\", \"max_connections\": 8, \"min_streams\": 16, \"padding\": ${MULTIPLEX_PADDING_ENABLED}, \"brutal\":{ \"enabled\":${VISION_BRUTAL_ENABLED}, \"up_mbps\":1000, \"down_mbps\":1000 } } }," &&
+    NODE_REPLACE+="\"${STACK_PREFIX}${NODE_NAME[11]} ${NODE_TAG[0]}\","
+
+    if [ -n "$PORT_HYSTERIA2" ]; then
+      local HYSTERIA2_CONFIG=" { \"type\": \"hysteria2\", \"tag\": \"${STACK_PREFIX}${NODE_NAME[12]} ${NODE_TAG[1]}\", \"server\": \"${CURR_IP}\", \"server_port\": ${PORT_HYSTERIA2}, \"up_mbps\": ${HY2_UP}, \"down_mbps\": ${HY2_DOWN}, \"password\": \"${UUID[12]}\", \"tls\": { \"enabled\": true, \"server_name\": \"${TLS_SERVER}\", ${CERT_PINNING_JSON} \"alpn\": [ \"h3\" ] }"
+      if [ "$IS_HY2_REALM" = 'is_hy2_realm' ]; then
+        HY2_REALM_ID="${HY2_REALM_ID:-${UUID[12]}}"
+        HYSTERIA2_CONFIG+=", \"realm\": { \"server_url\": \"https://realm.hy2.io\", \"token\": \"public\", \"realm_id\": \"${HY2_REALM_ID}\", \"stun_servers\": [ \"turn.cloudflare.com:3478\", \"stun.nextcloud.com:3478\", \"stun.sip.us:3478\", \"global.stun.twilio.com:3478\" ] }"
+      fi
+      HYSTERIA2_CONFIG+=" },"
+      if [[ -n "${PORT_HOPPING_START}" && -n "${PORT_HOPPING_END}" ]]; then
+        HYSTERIA2_CONFIG="${HYSTERIA2_CONFIG/\"server_port\": ${PORT_HYSTERIA2},/\"server_port\": ${PORT_HYSTERIA2}, \"server_ports\": [ \"${PORT_HOPPING_START}:${PORT_HOPPING_END}\" ], \"hop_interval\": \"30s\", \"hop_interval_max\": \"60s\",}"
+      fi
+      OUTBOUND_REPLACE+="${HYSTERIA2_CONFIG}"
+      NODE_REPLACE+="\"${STACK_PREFIX}${NODE_NAME[12]} ${NODE_TAG[1]}\","
     fi
-    local OUTBOUND_REPLACE+="${HYSTERIA2_CONFIG}"
-    local NODE_REPLACE+="\"${NODE_NAME[12]} ${NODE_TAG[1]}\","
-  fi
 
-  [ -n "$PORT_TUIC" ] &&
-  local TUIC_INBOUND=" { \"type\": \"tuic\", \"tag\": \"${NODE_NAME[13]} ${NODE_TAG[2]}\", \"server\": \"${SERVER_IP}\", \"server_port\": ${PORT_TUIC}, \"uuid\": \"${UUID[13]}\", \"password\": \"${TUIC_PASSWORD}\", \"congestion_control\": \"$TUIC_CONGESTION_CONTROL\", \"udp_relay_mode\": \"native\", \"zero_rtt_handshake\": false, \"heartbeat\": \"10s\", \"tls\": { \"enabled\": true, \"server_name\": \"${TLS_SERVER}\", ${CERT_PINNING_JSON} \"alpn\": [ \"h3\" ] } }," &&
-  local OUTBOUND_REPLACE+="${TUIC_INBOUND}" &&
-  local NODE_REPLACE+="\"${NODE_NAME[13]} ${NODE_TAG[2]}\","
+    [ -n "$PORT_TUIC" ] &&
+    local TUIC_INBOUND=" { \"type\": \"tuic\", \"tag\": \"${STACK_PREFIX}${NODE_NAME[13]} ${NODE_TAG[2]}\", \"server\": \"${CURR_IP}\", \"server_port\": ${PORT_TUIC}, \"uuid\": \"${UUID[13]}\", \"password\": \"${TUIC_PASSWORD}\", \"congestion_control\": \"$TUIC_CONGESTION_CONTROL\", \"udp_relay_mode\": \"native\", \"zero_rtt_handshake\": false, \"heartbeat\": \"10s\", \"tls\": { \"enabled\": true, \"server_name\": \"${TLS_SERVER}\", ${CERT_PINNING_JSON} \"alpn\": [ \"h3\" ] } }," &&
+    OUTBOUND_REPLACE+="${TUIC_INBOUND}" &&
+    NODE_REPLACE+="\"${STACK_PREFIX}${NODE_NAME[13]} ${NODE_TAG[2]}\","
 
-  [ -n "$PORT_SHADOWTLS" ] &&
-  local SHADOWTLS_INBOUND=" { \"type\": \"shadowsocks\", \"tag\": \"${NODE_NAME[14]} ${NODE_TAG[3]}\", \"method\": \"$SHADOWTLS_METHOD\", \"password\": \"$SHADOWTLS_PASSWORD\", \"detour\": \"shadowtls-out\", \"udp_over_tcp\": false, \"multiplex\": { \"enabled\": true, \"protocol\": \"h2mux\", \"max_connections\": 8, \"min_streams\": 16, \"padding\": true, \"brutal\":{ \"enabled\":${IS_BRUTAL}, \"up_mbps\":1000, \"down_mbps\":1000 } } }, { \"type\": \"shadowtls\", \"tag\": \"shadowtls-out\", \"server\": \"${SERVER_IP}\", \"server_port\": ${PORT_SHADOWTLS}, \"version\": 3, \"password\": \"${UUID[14]}\", \"tls\": { \"enabled\": true, \"server_name\": \"${TLS_SERVER}\", \"utls\": { \"enabled\": true, \"fingerprint\": \"${FINGER_PRINT}\" } } }," &&
-  local OUTBOUND_REPLACE+="${SHADOWTLS_INBOUND}" &&
-  local NODE_REPLACE+="\"${NODE_NAME[14]} ${NODE_TAG[3]}\","
+    [ -n "$PORT_SHADOWTLS" ] &&
+    local SHADOWTLS_INBOUND=" { \"type\": \"shadowsocks\", \"tag\": \"${STACK_PREFIX}${NODE_NAME[14]} ${NODE_TAG[3]}\", \"method\": \"$SHADOWTLS_METHOD\", \"password\": \"$SHADOWTLS_PASSWORD\", \"detour\": \"shadowtls-out\", \"udp_over_tcp\": false, \"multiplex\": { \"enabled\": true, \"protocol\": \"h2mux\", \"max_connections\": 8, \"min_streams\": 16, \"padding\": true, \"brutal\":{ \"enabled\":${IS_BRUTAL}, \"up_mbps\":1000, \"down_mbps\":1000 } } }, { \"type\": \"shadowtls\", \"tag\": \"shadowtls-out\", \"server\": \"${CURR_IP}\", \"server_port\": ${PORT_SHADOWTLS}, \"version\": 3, \"password\": \"${UUID[14]}\", \"tls\": { \"enabled\": true, \"server_name\": \"${TLS_SERVER}\", \"utls\": { \"enabled\": true, \"fingerprint\": \"${FINGER_PRINT}\" } } }," &&
+    OUTBOUND_REPLACE+="${SHADOWTLS_INBOUND}" &&
+    NODE_REPLACE+="\"${STACK_PREFIX}${NODE_NAME[14]} ${NODE_TAG[3]}\","
 
-  [ -n "$PORT_SHADOWSOCKS" ] &&
-  local OUTBOUND_REPLACE+=" { \"type\": \"shadowsocks\", \"tag\": \"${NODE_NAME[15]} ${NODE_TAG[4]}\", \"server\": \"${SERVER_IP}\", \"server_port\": $PORT_SHADOWSOCKS, \"method\": \"${SHADOWSOCKS_METHOD}\", \"password\": \"${SHADOWSOCKS_PASSWORD}\", \"multiplex\": { \"enabled\": true, \"protocol\": \"h2mux\", \"max_connections\": 8, \"min_streams\": 16, \"padding\": true, \"brutal\":{ \"enabled\":${IS_BRUTAL}, \"up_mbps\":1000, \"down_mbps\":1000 } } }," &&
-  local NODE_REPLACE+="\"${NODE_NAME[15]} ${NODE_TAG[4]}\","
+    [ -n "$PORT_SHADOWSOCKS" ] &&
+    OUTBOUND_REPLACE+=" { \"type\": \"shadowsocks\", \"tag\": \"${STACK_PREFIX}${NODE_NAME[15]} ${NODE_TAG[4]}\", \"server\": \"${CURR_IP}\", \"server_port\": $PORT_SHADOWSOCKS, \"method\": \"${SHADOWSOCKS_METHOD}\", \"password\": \"${SHADOWSOCKS_PASSWORD}\", \"multiplex\": { \"enabled\": true, \"protocol\": \"h2mux\", \"max_connections\": 8, \"min_streams\": 16, \"padding\": true, \"brutal\":{ \"enabled\":${IS_BRUTAL}, \"up_mbps\":1000, \"down_mbps\":1000 } } }," &&
+    NODE_REPLACE+="\"${STACK_PREFIX}${NODE_NAME[15]} ${NODE_TAG[4]}\","
 
-  [ -n "$PORT_TROJAN" ] &&
-  local OUTBOUND_REPLACE+=" { \"type\": \"trojan\", \"tag\": \"${NODE_NAME[16]} ${NODE_TAG[5]}\", \"server\": \"${SERVER_IP}\", \"server_port\": $PORT_TROJAN, \"password\": \"$TROJAN_PASSWORD\", \"tls\": { \"enabled\": true, ${CERT_PINNING_JSON} \"server_name\":\"${TLS_SERVER}\", \"utls\": { \"enabled\":true, \"fingerprint\":\"${FINGER_PRINT}\" } }, \"multiplex\": { \"enabled\":true, \"protocol\":\"h2mux\", \"max_connections\": 8, \"min_streams\": 16, \"padding\": true, \"brutal\":{ \"enabled\":${IS_BRUTAL}, \"up_mbps\":1000, \"down_mbps\":1000 } } }," &&
-  local NODE_REPLACE+="\"${NODE_NAME[16]} ${NODE_TAG[5]}\","
+    [ -n "$PORT_TROJAN" ] &&
+    OUTBOUND_REPLACE+=" { \"type\": \"trojan\", \"tag\": \"${STACK_PREFIX}${NODE_NAME[16]} ${NODE_TAG[5]}\", \"server\": \"${CURR_IP}\", \"server_port\": $PORT_TROJAN, \"password\": \"$TROJAN_PASSWORD\", \"tls\": { \"enabled\": true, ${CERT_PINNING_JSON} \"server_name\":\"${TLS_SERVER}\", \"utls\": { \"enabled\":true, \"fingerprint\":\"${FINGER_PRINT}\" } }, \"multiplex\": { \"enabled\":true, \"protocol\":\"h2mux\", \"max_connections\": 8, \"min_streams\": 16, \"padding\": true, \"brutal\":{ \"enabled\":${IS_BRUTAL}, \"up_mbps\":1000, \"down_mbps\":1000 } } }," &&
+    NODE_REPLACE+="\"${STACK_PREFIX}${NODE_NAME[16]} ${NODE_TAG[5]}\","
 
-  if [ -n "$PORT_VMESS_WS" ]; then
-    local VMESS_CDN_PORT=${CDN_PORT[17]:-80}
-    local VMESS_CDN_HOST=$(format_uri_host "${CDN[17]}")
-     if [[ "${STATUS[1]}" =~ $(text 27)|$(text 28) ]] || [[ "$IS_ARGO" = 'is_argo' && "$NONINTERACTIVE_INSTALL" = 'noninteractive_install' ]]; then
-      local OUTBOUND_REPLACE+=" { \"type\": \"vmess\", \"tag\": \"${NODE_NAME[17]} ${NODE_TAG[6]}\", \"server\":\"${VMESS_CDN_HOST}\", \"server_port\":${VMESS_CDN_PORT}, \"uuid\": \"${UUID[17]}\", \"security\": \"auto\", \"transport\": { \"type\":\"ws\", \"path\":\"/$VMESS_WS_PATH\", \"headers\": { \"Host\": \"$ARGO_DOMAIN\" } }, \"multiplex\": { \"enabled\":true, \"protocol\":\"h2mux\", \"max_streams\":16, \"padding\": true, \"brutal\":{ \"enabled\":${IS_BRUTAL}, \"up_mbps\":1000, \"down_mbps\":1000 } } },"
-      [ "$ARGO_TYPE" = 'is_token_argo' ] && [ -z "$PROMPT" ] && local PROMPT="
+    if [ -n "$PORT_VMESS_WS" ]; then
+      local VMESS_CDN_PORT=${CDN_PORT[17]:-80}
+      local CURR_VMESS_CDN="${CDN[17]}"
+      if [ "$STACK" = "ipv4" ]; then
+        [[ "$CURR_VMESS_CDN" =~ : ]] && CURR_VMESS_CDN="104.17.78.30"
+      elif [ "$STACK" = "ipv6" ]; then
+        [[ -n "$CURR_VMESS_CDN" && ! "$CURR_VMESS_CDN" =~ : && "$CURR_VMESS_CDN" =~ ^[0-9.]+$ ]] && CURR_VMESS_CDN="2606:4700:9ad0:bd57:def6:e9ce:cc72:2ff6"
+      fi
+      local VMESS_CDN_HOST=$(format_uri_host "${CURR_VMESS_CDN}")
+      if [[ "${STATUS[1]}" =~ $(text 27)|$(text 28) ]] || [[ "$IS_ARGO" = 'is_argo' && "$NONINTERACTIVE_INSTALL" = 'noninteractive_install' ]]; then
+        OUTBOUND_REPLACE+=" { \"type\": \"vmess\", \"tag\": \"${STACK_PREFIX}${NODE_NAME[17]} ${NODE_TAG[6]}\", \"server\":\"${VMESS_CDN_HOST}\", \"server_port\":${VMESS_CDN_PORT}, \"uuid\": \"${UUID[17]}\", \"security\": \"auto\", \"transport\": { \"type\":\"ws\", \"path\":\"/$VMESS_WS_PATH\", \"headers\": { \"Host\": \"$ARGO_DOMAIN\" } }, \"multiplex\": { \"enabled\":true, \"protocol\":\"h2mux\", \"max_streams\":16, \"padding\": true, \"brutal\":{ \"enabled\":${IS_BRUTAL}, \"up_mbps\":1000, \"down_mbps\":1000 } } },"
+        [ "$ARGO_TYPE" = 'is_token_argo' ] && [ -z "$PROMPT" ] && local PROMPT="
   # $(text 94)"
-    else
-      local WS_SERVER_IP_SHOW=${WS_SERVER_IP[17]} &&
-      local TYPE_HOST_DOMAIN=$VMESS_HOST_DOMAIN &&
-      local TYPE_PORT_WS=$PORT_VMESS_WS &&
-      local PROMPT+="
-      # $(text 52)" &&
-      local OUTBOUND_REPLACE+=" { \"type\": \"vmess\", \"tag\": \"${NODE_NAME[17]} ${NODE_TAG[6]}\", \"server\":\"${VMESS_CDN_HOST}\", \"server_port\":${VMESS_CDN_PORT}, \"uuid\":\"${UUID[17]}\", \"security\": \"auto\", \"transport\": { \"type\":\"ws\", \"path\":\"/$VMESS_WS_PATH\", \"headers\": { \"Host\": \"$VMESS_HOST_DOMAIN\" } }, \"multiplex\": { \"enabled\":true, \"protocol\":\"h2mux\", \"max_streams\":16, \"padding\": true, \"brutal\":{ \"enabled\":${IS_BRUTAL}, \"up_mbps\":1000, \"down_mbps\":1000 } } },"
+      else
+        local WS_SERVER_IP_SHOW=${WS_SERVER_IP[17]} &&
+        local TYPE_HOST_DOMAIN=$VMESS_HOST_DOMAIN &&
+        local TYPE_PORT_WS=$PORT_VMESS_WS &&
+        [[ ! "$PROMPT" =~ $(text 52) ]] && PROMPT+="
+        # $(text 52)" &&
+        OUTBOUND_REPLACE+=" { \"type\": \"vmess\", \"tag\": \"${STACK_PREFIX}${NODE_NAME[17]} ${NODE_TAG[6]}\", \"server\":\"${VMESS_CDN_HOST}\", \"server_port\":${VMESS_CDN_PORT}, \"uuid\":\"${UUID[17]}\", \"security\": \"auto\", \"transport\": { \"type\":\"ws\", \"path\":\"/$VMESS_WS_PATH\", \"headers\": { \"Host\": \"$VMESS_HOST_DOMAIN\" } }, \"multiplex\": { \"enabled\":true, \"protocol\":\"h2mux\", \"max_streams\":16, \"padding\": true, \"brutal\":{ \"enabled\":${IS_BRUTAL}, \"up_mbps\":1000, \"down_mbps\":1000 } } },"
+      fi
+      NODE_REPLACE+="\"${STACK_PREFIX}${NODE_NAME[17]} ${NODE_TAG[6]}\","
     fi
-    local NODE_REPLACE+="\"${NODE_NAME[17]} ${NODE_TAG[6]}\","
-  fi
 
-  if [ -n "$PORT_VLESS_WS" ]; then
-    local VLESS_CDN_PORT=${CDN_PORT[18]:-443}
-    local VLESS_CDN_HOST=$(format_uri_host "${CDN[18]}")
-    if [[ "${STATUS[1]}" =~ $(text 27)|$(text 28) ]] || [[ "$IS_ARGO" = 'is_argo' && "$NONINTERACTIVE_INSTALL" = 'noninteractive_install' ]]; then
-      local OUTBOUND_REPLACE+=" { \"type\": \"vless\", \"tag\": \"${NODE_NAME[18]} ${NODE_TAG[7]}\", \"server\":\"${VLESS_CDN_HOST}\", \"server_port\":${VLESS_CDN_PORT}, \"uuid\": \"${UUID[18]}\", \"tls\": { \"enabled\":true, \"server_name\":\"$ARGO_DOMAIN\", \"insecure\": false, \"utls\": { \"enabled\":true, \"fingerprint\":\"${FINGER_PRINT}\" } }, \"transport\": { \"type\":\"ws\", \"path\":\"/$VLESS_WS_PATH\", \"headers\": { \"Host\": \"$ARGO_DOMAIN\" }, \"max_early_data\":2560, \"early_data_header_name\":\"Sec-WebSocket-Protocol\" }, \"multiplex\": { \"enabled\":true, \"protocol\":\"h2mux\", \"max_streams\":16, \"padding\": true, \"brutal\":{ \"enabled\":${IS_BRUTAL}, \"up_mbps\":1000, \"down_mbps\":1000 } } },"
-      [ "$ARGO_TYPE" = 'is_token_argo' ] && [ -z "$PROMPT" ] && local PROMPT="
+    if [ -n "$PORT_VLESS_WS" ]; then
+      local VLESS_CDN_PORT=${CDN_PORT[18]:-443}
+      local CURR_VLESS_CDN="${CDN[18]}"
+      if [ "$STACK" = "ipv4" ]; then
+        [[ "$CURR_VLESS_CDN" =~ : ]] && CURR_VLESS_CDN="104.17.78.30"
+      elif [ "$STACK" = "ipv6" ]; then
+        [[ -n "$CURR_VLESS_CDN" && ! "$CURR_VLESS_CDN" =~ : && "$CURR_VLESS_CDN" =~ ^[0-9.]+$ ]] && CURR_VLESS_CDN="2606:4700:9ad0:bd57:def6:e9ce:cc72:2ff6"
+      fi
+      local VLESS_CDN_HOST=$(format_uri_host "${CURR_VLESS_CDN}")
+      if [[ "${STATUS[1]}" =~ $(text 27)|$(text 28) ]] || [[ "$IS_ARGO" = 'is_argo' && "$NONINTERACTIVE_INSTALL" = 'noninteractive_install' ]]; then
+        OUTBOUND_REPLACE+=" { \"type\": \"vless\", \"tag\": \"${STACK_PREFIX}${NODE_NAME[18]} ${NODE_TAG[7]}\", \"server\":\"${VLESS_CDN_HOST}\", \"server_port\":${VLESS_CDN_PORT}, \"uuid\": \"${UUID[18]}\", \"tls\": { \"enabled\":true, \"server_name\":\"$ARGO_DOMAIN\", \"insecure\": false, \"utls\": { \"enabled\":true, \"fingerprint\":\"${FINGER_PRINT}\" } }, \"transport\": { \"type\":\"ws\", \"path\":\"/$VLESS_WS_PATH\", \"headers\": { \"Host\": \"$ARGO_DOMAIN\" }, \"max_early_data\":2560, \"early_data_header_name\":\"Sec-WebSocket-Protocol\" }, \"multiplex\": { \"enabled\":true, \"protocol\":\"h2mux\", \"max_streams\":16, \"padding\": true, \"brutal\":{ \"enabled\":${IS_BRUTAL}, \"up_mbps\":1000, \"down_mbps\":1000 } } },"
+        [ "$ARGO_TYPE" = 'is_token_argo' ] && [ -z "$PROMPT" ] && local PROMPT="
   # $(text 94)"
-    else
-      local WS_SERVER_IP_SHOW=${WS_SERVER_IP[18]} &&
-      local TYPE_HOST_DOMAIN=$VLESS_HOST_DOMAIN &&
-      local TYPE_PORT_WS=$PORT_VLESS_WS &&
-      local PROMPT+="
-      # $(text 52)" &&
-      local OUTBOUND_REPLACE+=" { \"type\": \"vless\", \"tag\": \"${NODE_NAME[18]} ${NODE_TAG[7]}\", \"server\":\"${VLESS_CDN_HOST}\", \"server_port\":${VLESS_CDN_PORT}, \"uuid\": \"${UUID[18]}\",\"tls\": { \"enabled\":true, \"server_name\":\"$VLESS_HOST_DOMAIN\", \"insecure\": false, \"utls\": { \"enabled\":true, \"fingerprint\":\"${FINGER_PRINT}\" } }, \"transport\": { \"type\":\"ws\", \"path\":\"/$VLESS_WS_PATH\", \"headers\": { \"Host\": \"$VLESS_HOST_DOMAIN\" }, \"max_early_data\":2560, \"early_data_header_name\":\"Sec-WebSocket-Protocol\" }, \"multiplex\": { \"enabled\":true, \"protocol\":\"h2mux\", \"max_streams\":16, \"padding\": true, \"brutal\":{ \"enabled\":${IS_BRUTAL}, \"up_mbps\":1000, \"down_mbps\":1000 } } },"
+      else
+        local WS_SERVER_IP_SHOW=${WS_SERVER_IP[18]} &&
+        local TYPE_HOST_DOMAIN=$VLESS_HOST_DOMAIN &&
+        local TYPE_PORT_WS=$PORT_VLESS_WS &&
+        [[ ! "$PROMPT" =~ $(text 52) ]] && PROMPT+="
+        # $(text 52)" &&
+        OUTBOUND_REPLACE+=" { \"type\": \"vless\", \"tag\": \"${STACK_PREFIX}${NODE_NAME[18]} ${NODE_TAG[7]}\", \"server\":\"${VLESS_CDN_HOST}\", \"server_port\":${VLESS_CDN_PORT}, \"uuid\": \"${UUID[18]}\",\"tls\": { \"enabled\":true, \"server_name\":\"$VLESS_HOST_DOMAIN\", \"insecure\": false, \"utls\": { \"enabled\":true, \"fingerprint\":\"${FINGER_PRINT}\" } }, \"transport\": { \"type\":\"ws\", \"path\":\"/$VLESS_WS_PATH\", \"headers\": { \"Host\": \"$VLESS_HOST_DOMAIN\" }, \"max_early_data\":2560, \"early_data_header_name\":\"Sec-WebSocket-Protocol\" }, \"multiplex\": { \"enabled\":true, \"protocol\":\"h2mux\", \"max_streams\":16, \"padding\": true, \"brutal\":{ \"enabled\":${IS_BRUTAL}, \"up_mbps\":1000, \"down_mbps\":1000 } } },"
+      fi
+      NODE_REPLACE+="\"${STACK_PREFIX}${NODE_NAME[18]} ${NODE_TAG[7]}\","
     fi
-    local NODE_REPLACE+="\"${NODE_NAME[18]} ${NODE_TAG[7]}\","
-  fi
 
-  [ -n "$PORT_H2_REALITY" ] &&
-  local REALITY_H2_INBOUND=" { \"type\": \"vless\", \"tag\": \"${NODE_NAME[19]} ${NODE_TAG[8]}\", \"server\": \"${SERVER_IP}\", \"server_port\": ${PORT_H2_REALITY}, \"uuid\":\"${UUID[19]}\", \"tls\": { \"enabled\":true, \"server_name\":\"addons.mozilla.org\", \"utls\": { \"enabled\":true, \"fingerprint\":\"${FINGER_PRINT}\" }, \"reality\":{ \"enabled\":true, \"public_key\":\"${REALITY_PUBLIC[19]}\", \"short_id\":\"\" } }, \"transport\": { \"type\": \"http\" } }," &&
-  local REALITY_H2_NODE="\"${NODE_NAME[19]} ${NODE_TAG[8]}\"" &&
-  local NODE_REPLACE+="${REALITY_H2_NODE}," &&
-  local OUTBOUND_REPLACE+=" ${REALITY_H2_INBOUND}"
+    [ -n "$PORT_H2_REALITY" ] &&
+    local REALITY_H2_INBOUND=" { \"type\": \"vless\", \"tag\": \"${STACK_PREFIX}${NODE_NAME[19]} ${NODE_TAG[8]}\", \"server\": \"${CURR_IP}\", \"server_port\": ${PORT_H2_REALITY}, \"uuid\":\"${UUID[19]}\", \"tls\": { \"enabled\":true, \"server_name\":\"addons.mozilla.org\", \"utls\": { \"enabled\":true, \"fingerprint\":\"${FINGER_PRINT}\" }, \"reality\":{ \"enabled\":true, \"public_key\":\"${REALITY_PUBLIC[19]}\", \"short_id\":\"\" } }, \"transport\": { \"type\": \"http\" } }," &&
+    NODE_REPLACE+="\"${STACK_PREFIX}${NODE_NAME[19]} ${NODE_TAG[8]}\"," &&
+    OUTBOUND_REPLACE+=" ${REALITY_H2_INBOUND}"
 
-  [ -n "$PORT_GRPC_REALITY" ] &&
-  local OUTBOUND_REPLACE+=" { \"type\": \"vless\", \"tag\": \"${NODE_NAME[20]} ${NODE_TAG[9]}\", \"server\": \"${SERVER_IP}\", \"server_port\": ${PORT_GRPC_REALITY}, \"uuid\":\"${UUID[20]}\", \"tls\": { \"enabled\":true, \"server_name\":\"addons.mozilla.org\", \"utls\": { \"enabled\":true, \"fingerprint\":\"${FINGER_PRINT}\" }, \"reality\":{ \"enabled\":true, \"public_key\":\"${REALITY_PUBLIC[20]}\", \"short_id\":\"\" } }, \"transport\": { \"type\": \"grpc\", \"service_name\": \"grpc\" } }," &&
-  local NODE_REPLACE+="\"${NODE_NAME[20]} ${NODE_TAG[9]}\","
+    [ -n "$PORT_GRPC_REALITY" ] &&
+    OUTBOUND_REPLACE+=" { \"type\": \"vless\", \"tag\": \"${STACK_PREFIX}${NODE_NAME[20]} ${NODE_TAG[9]}\", \"server\": \"${CURR_IP}\", \"server_port\": ${PORT_GRPC_REALITY}, \"uuid\":\"${UUID[20]}\", \"tls\": { \"enabled\":true, \"server_name\":\"addons.mozilla.org\", \"utls\": { \"enabled\":true, \"fingerprint\":\"${FINGER_PRINT}\" }, \"reality\":{ \"enabled\":true, \"public_key\":\"${REALITY_PUBLIC[20]}\", \"short_id\":\"\" } }, \"transport\": { \"type\": \"grpc\", \"service_name\": \"grpc\" } }," &&
+    NODE_REPLACE+="\"${STACK_PREFIX}${NODE_NAME[20]} ${NODE_TAG[9]}\","
 
-  [ -n "$PORT_ANYTLS" ] &&
-  local OUTBOUND_REPLACE+=" { \"type\": \"anytls\", \"tag\": \"${NODE_NAME[21]} ${NODE_TAG[10]}\", \"server\": \"${SERVER_IP}\", \"server_port\": ${PORT_ANYTLS}, \"password\": \"${UUID[21]}\", \"idle_session_check_interval\": \"30s\", \"idle_session_timeout\": \"30s\", \"min_idle_session\": 5, \"tls\": { \"enabled\": true, ${CERT_PINNING_JSON} \"server_name\": \"${TLS_SERVER}\", \"utls\": { \"enabled\": true, \"fingerprint\": \"${FINGER_PRINT}\" } } }," &&
-  local NODE_REPLACE+="\"${NODE_NAME[21]} ${NODE_TAG[10]}\","
+    [ -n "$PORT_ANYTLS" ] &&
+    OUTBOUND_REPLACE+=" { \"type\": \"anytls\", \"tag\": \"${STACK_PREFIX}${NODE_NAME[21]} ${NODE_TAG[10]}\", \"server\": \"${CURR_IP}\", \"server_port\": ${PORT_ANYTLS}, \"password\": \"${UUID[21]}\", \"idle_session_check_interval\": \"30s\", \"idle_session_timeout\": \"30s\", \"min_idle_session\": 5, \"tls\": { \"enabled\": true, ${CERT_PINNING_JSON} \"server_name\": \"${TLS_SERVER}\", \"utls\": { \"enabled\": true, \"fingerprint\": \"${FINGER_PRINT}\" } } }," &&
+    NODE_REPLACE+="\"${STACK_PREFIX}${NODE_NAME[21]} ${NODE_TAG[10]}\","
 
-  [ -n "$PORT_NAIVE" ] &&
-  local OUTBOUND_REPLACE+=" { \"type\": \"naive\", \"tag\": \"${NODE_NAME[22]} ${NODE_TAG[11]} http2\", \"server\": \"${NAIVE_SERVER:-$SERVER_IP}\", \"server_port\": ${PORT_NAIVE}, \"username\": \"${UUID[22]}\", \"password\": \"${UUID[22]}\", \"udp_over_tcp\": true, \"quic\": false, \"tls\": { \"enabled\": true, ${NAIVE_CERT_JSON}\"server_name\": \"${NAIVE_SNI:-$TLS_SERVER}\" } }, { \"type\": \"naive\", \"tag\": \"${NODE_NAME[22]} ${NODE_TAG[11]} quic\", \"server\": \"${NAIVE_SERVER:-$SERVER_IP}\", \"server_port\": ${PORT_NAIVE}, \"username\": \"${UUID[22]}\", \"password\": \"${UUID[22]}\", \"udp_over_tcp\": false, \"quic\": true, \"quic_congestion_control\": \"bbr\", \"tls\": { \"enabled\": true, ${NAIVE_CERT_JSON}\"server_name\": \"${NAIVE_SNI:-$TLS_SERVER}\" } }," &&
-  local NODE_REPLACE+="\"${NODE_NAME[22]} ${NODE_TAG[11]} http2\",\"${NODE_NAME[22]} ${NODE_TAG[11]} quic\","
+    [ -n "$PORT_NAIVE" ] &&
+    OUTBOUND_REPLACE+=" { \"type\": \"naive\", \"tag\": \"${STACK_PREFIX}${NODE_NAME[22]} ${NODE_TAG[11]} http2\", \"server\": \"${CURR_NAIVE_SERVER}\", \"server_port\": ${PORT_NAIVE}, \"username\": \"${UUID[22]}\", \"password\": \"${UUID[22]}\", \"udp_over_tcp\": true, \"quic\": false, \"tls\": { \"enabled\": true, ${NAIVE_CERT_JSON}\"server_name\": \"${NAIVE_SNI:-$TLS_SERVER}\" } }, { \"type\": \"naive\", \"tag\": \"${STACK_PREFIX}${NODE_NAME[22]} ${NODE_TAG[11]} quic\", \"server\": \"${CURR_NAIVE_SERVER}\", \"server_port\": ${PORT_NAIVE}, \"username\": \"${UUID[22]}\", \"password\": \"${UUID[22]}\", \"udp_over_tcp\": false, \"quic\": true, \"quic_congestion_control\": \"bbr\", \"tls\": { \"enabled\": true, ${NAIVE_CERT_JSON}\"server_name\": \"${NAIVE_SNI:-$TLS_SERVER}\" } }," &&
+    NODE_REPLACE+="\"${STACK_PREFIX}${NODE_NAME[22]} ${NODE_TAG[11]} http2\",\"${STACK_PREFIX}${NODE_NAME[22]} ${NODE_TAG[11]} quic\","
+  done
 
   {
     # 生成 sing-box SFM SFA SFI 订阅文件
