@@ -5208,7 +5208,9 @@ export_list() {
 
   local IS_COMMERCIAL_CERT=false
   if [ -s "${WORK_DIR}/cert/cert.pem" ]; then
-    if openssl verify "${WORK_DIR}/cert/cert.pem" >/dev/null 2>&1; then
+    if openssl verify -untrusted "${WORK_DIR}/cert/cert.pem" "${WORK_DIR}/cert/cert.pem" >/dev/null 2>&1 || openssl verify "${WORK_DIR}/cert/cert.pem" >/dev/null 2>&1; then
+      IS_COMMERCIAL_CERT=true
+    elif grep -qiE "Let's Encrypt|ZeroSSL|Google Trust Services|DigiCert" <(openssl x509 -in "${WORK_DIR}/cert/cert.pem" -noout -issuer 2>/dev/null); then
       IS_COMMERCIAL_CERT=true
     fi
   fi
@@ -6620,6 +6622,9 @@ manage_acme_certificate_menu() {
               sed -i "s/\"server_name\":.*/\"server_name\":\"$CERT_DOMAIN\",/g" "$FILE"
             fi
           done
+
+          # 重新生成全套客户端订阅文件（包含 naive 绑定商业域名）
+          export_list >/dev/null 2>&1 || true
 
           [ "$L" = "C" ] && info "Let's Encrypt 证书申请与安装成功！已配置每日自动检查与续期。" || info "Let's Encrypt certificate applied & installed successfully! Auto-renew and restart scheduled."
         else
